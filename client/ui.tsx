@@ -1,7 +1,10 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/react-native";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  AccessibilityInfo,
+  Animated,
+  Easing,
   Pressable,
   StyleSheet,
   Text,
@@ -40,24 +43,62 @@ export function stateColor(theme: PluginTheme, state: CrewState): string {
   }
 }
 
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    let active = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((value) => active && setReduced(value))
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduced);
+    return () => {
+      active = false;
+      sub.remove();
+    };
+  }, []);
+  return reduced;
+}
+
+/**
+ * A working agent breathes, like Paseo's own running dot; every other state holds still.
+ * Motion is the signal that the agent is alive, so it stops when the user asks for less motion.
+ */
 export function StatusDot({
   theme,
   state,
   size = 8,
+  pulse = state === "working",
 }: {
   theme: PluginTheme;
   state: CrewState;
   size?: number;
+  pulse?: boolean;
 }) {
-  const dim = state === "closed" ? 0.5 : 1;
+  const reduced = useReducedMotion();
+  const opacity = useRef(new Animated.Value(1)).current;
+  const animate = pulse && !reduced;
+  useEffect(() => {
+    if (!animate) {
+      opacity.setValue(state === "closed" ? 0.5 : 1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 0.35, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [animate, opacity, state]);
   return (
-    <View
+    <Animated.View
       style={{
         width: size,
         height: size,
         borderRadius: size / 2,
         backgroundColor: stateColor(theme, state),
-        opacity: dim,
+        opacity,
       }}
     />
   );

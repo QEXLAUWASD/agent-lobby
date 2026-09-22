@@ -256,7 +256,7 @@ export function CrewView({ scope, theme, host, layout, navigation }: CrewViewPro
   const chips = STATE_ORDER.filter((state) => counts[state] > 0);
   const emptyLabel =
     directory.phase === "loading"
-      ? "Loading agents"
+      ? ""
       : query || filter !== "all"
         ? "No matching agents"
         : scope
@@ -275,10 +275,19 @@ export function CrewView({ scope, theme, host, layout, navigation }: CrewViewPro
     <View style={{ flex: 1, backgroundColor: colors.surface0 }}>
       <View style={[{ paddingHorizontal: space.lg, paddingTop: space.md, gap: space.sm }, column]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          <Muted theme={theme} size={font.sm} style={{ flex: 1 }}>
-            {summary(counts)}
-            {directory.truncated ? " · first 2000" : ""}
-          </Muted>
+          {directory.phase === "loading" ? (
+            <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: space.sm }}>
+              <StatusDot theme={theme} state="working" pulse />
+              <Muted theme={theme} size={font.sm}>
+                Loading agents
+              </Muted>
+            </View>
+          ) : (
+            <Muted theme={theme} size={font.sm} style={{ flex: 1 }}>
+              {summary(counts)}
+              {directory.truncated ? " · first 2000" : ""}
+            </Muted>
+          )}
           <IconButton theme={theme} icon="RefreshCw" label="Refresh" onPress={directory.reload} />
         </View>
         <TextInput
@@ -326,7 +335,7 @@ export function CrewView({ scope, theme, host, layout, navigation }: CrewViewPro
         renderItem={renderRow}
         extraData={[selected, collapsed, now, busy]}
         contentContainerStyle={[{ paddingVertical: space.sm, paddingBottom: space.xl }, column]}
-        ListEmptyComponent={<Empty theme={theme} label={emptyLabel} />}
+        ListEmptyComponent={emptyLabel ? <Empty theme={theme} label={emptyLabel} /> : null}
         style={{ flex: 1 }}
       />
 
