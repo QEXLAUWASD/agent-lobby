@@ -35,7 +35,7 @@ async function fetchAgents(paseo: PaseoApi): Promise<{ agents: Map<string, Paseo
   return { agents, truncated: true };
 }
 
-async function fetchWorkspaces(paseo: PaseoApi): Promise<Map<string, PaseoWorkspace>> {
+export async function fetchWorkspaces(paseo: PaseoApi): Promise<Map<string, PaseoWorkspace>> {
   const workspaces = new Map<string, PaseoWorkspace>();
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page += 1) {

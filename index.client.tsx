@@ -1,4 +1,5 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { addCrewHeaderButtons } from "./client/header-buttons";
 import { CrewPanel, CrewSurface } from "./client/main";
 
 export default function contribute(client: PluginClientContext) {
@@ -12,7 +13,7 @@ export default function contribute(client: PluginClientContext) {
       Component: CrewPanel,
     }),
     client.addSurface("crew", CrewSurface),
-    client.addSidebarItem({ id: "crew", title: "Crew", icon: "Users", surface: "crew" }),
+    addCrewHeaderButtons(client),
     client.addCommandCenterItem({
       id: "open-crew",
       title: "Open Crew",

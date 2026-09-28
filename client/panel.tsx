@@ -39,7 +39,11 @@ interface CrewViewProps extends PluginSurfaceProps {
   scope: string | null;
 }
 
-export function CrewView({ scope, theme, host, layout, navigation }: CrewViewProps) {
+export function CrewView({ scope: homeScope, theme, host, layout, navigation }: CrewViewProps) {
+  // A panel starts on its own workspace and can widen to every workspace; the surface is always wide.
+  const inPanel = homeScope !== null;
+  const [allWorkspaces, setAllWorkspaces] = useState(false);
+  const scope = inPanel && !allWorkspaces ? homeScope : null;
   const paseo = usePaseo();
   const toast = useToast();
   const now = useClock();
@@ -270,7 +274,7 @@ export function CrewView({ scope, theme, host, layout, navigation }: CrewViewPro
       : undefined;
 
   // A workspace pane fills its dock; the global surface is reading-width, like Paseo's list pages.
-  const column = scope === null ? { width: "100%" as const, maxWidth: 720, alignSelf: "center" as const } : null;
+  const column = !inPanel ? { width: "100%" as const, maxWidth: 720, alignSelf: "center" as const } : null;
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface0 }}>
       <View style={[{ paddingHorizontal: space.lg, paddingTop: space.md, gap: space.sm }, column]}>
@@ -306,6 +310,22 @@ export function CrewView({ scope, theme, host, layout, navigation }: CrewViewPro
             fontSize: font.base,
           }}
         />
+        {inPanel ? (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+            <Chip
+              theme={theme}
+              label="This workspace"
+              selected={!allWorkspaces}
+              onPress={() => setAllWorkspaces(false)}
+            />
+            <Chip
+              theme={theme}
+              label="All workspaces"
+              selected={allWorkspaces}
+              onPress={() => setAllWorkspaces(true)}
+            />
+          </View>
+        ) : null}
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
           <Chip
             theme={theme}
