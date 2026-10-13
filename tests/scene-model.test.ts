@@ -93,7 +93,7 @@ describe("touchSlop", () => {
 });
 
 describe("spriteRole and characterLabel", () => {
-  it("reads the ghostline role and falls back to a plain agent", () => {
+  it("reads the role label and falls back to a plain agent", () => {
     expect(spriteRole(agent({ id: "a", labels: { "ghostline/role": "nexus" } }))).toBe("nexus");
     expect(spriteRole(agent({ id: "b", labels: { "ghostline/role": "Overseer" } }))).toBe("overseer");
     expect(spriteRole(agent({ id: "c", labels: { "ghostline/role": "janitor" } }))).toBe("agent");
@@ -101,11 +101,11 @@ describe("spriteRole and characterLabel", () => {
   });
 
   it("says title, role and state, and what is being said", () => {
-    const meow = agent({ id: "m", title: "Fix login form", labels: { "ghostline/role": "meow" } });
-    expect(characterLabel(meow, "working")).toBe("Fix login form, Meow, Working");
-    expect(characterLabel(meow, "needs-input", "Run npm test")).toBe("Fix login form, Meow, Needs you, Run npm test");
+    const dev = agent({ id: "m", title: "Fix login form", labels: { "ghostline/role": "meow" } });
+    expect(characterLabel(dev, "working")).toBe("Fix login form, Meow, Working");
+    expect(characterLabel(dev, "needs-input", "Run npm test")).toBe("Fix login form, Meow, Needs you, Run npm test");
     expect(characterLabel(agent({ id: "abcdefghij" }), "closed")).toBe("claude · abcdefg, Closed");
-    expect(characterLabel(meow, "idle", null, true)).toBe("Visitor, Fix login form, Meow, Idle");
+    expect(characterLabel(dev, "idle", null, true)).toBe("Visitor, Fix login form, Meow, Idle");
   });
 });
 
@@ -200,8 +200,8 @@ describe("moveKind", () => {
 
 describe("markerPath", () => {
   const agents = [
-    agent({ id: "nexus" }),
-    agent({ id: "meow" }, "nexus"),
+    agent({ id: "lead" }),
+    agent({ id: "dev" }, "lead"),
     agent({ id: "other", workspaceId: "ws-b" }),
   ];
   const office = officeOf(agents);
@@ -212,13 +212,13 @@ describe("markerPath", () => {
   };
 
   it("goes desk to desk, also across rooms", () => {
-    expect(markerPath({ from: "nexus", to: "meow" }, office)).toEqual({
-      from: seat("nexus"),
-      to: seat("meow"),
+    expect(markerPath({ from: "lead", to: "dev" }, office)).toEqual({
+      from: seat("lead"),
+      to: seat("dev"),
       fromSeated: true,
       toSeated: true,
     });
-    expect(markerPath({ from: "other", to: "meow" }, office)).toMatchObject({ from: seat("other"), to: seat("meow") });
+    expect(markerPath({ from: "other", to: "dev" }, office)).toMatchObject({ from: seat("other"), to: seat("dev") });
   });
 
   it("comes in through the recipient's door when the sender is unknown or not in this office", () => {
@@ -233,8 +233,8 @@ describe("markerPath", () => {
   });
 
   it("leaves through the sender's door when the recipient is not in this office", () => {
-    expect(markerPath({ from: "meow", to: "gone" }, office)).toEqual({
-      from: seat("meow"),
+    expect(markerPath({ from: "dev", to: "gone" }, office)).toEqual({
+      from: seat("dev"),
       to: door("ws-a"),
       fromSeated: true,
       toSeated: false,
@@ -342,8 +342,8 @@ describe("actFrame", () => {
 describe("highlighted", () => {
   const roots = buildForest(
     [
-      agent({ id: "root", title: "Nexus room", status: "running" }),
-      agent({ id: "kid", title: "Meow painter" }, "root"),
+      agent({ id: "root", title: "Lead", status: "running" }),
+      agent({ id: "kid", title: "Painter" }, "root"),
       agent({ id: "solo", title: "Painter two", status: "error" }),
     ],
     null,

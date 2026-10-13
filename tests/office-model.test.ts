@@ -59,16 +59,16 @@ const cells = (layout: Office) => new Map([...layout.desks].map(([id, desk]) => 
 const inside = (inner: Rect, outer: Rect) =>
   inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
 
-/** Overseer → Nexus → three Meows, plus two agents on their own. */
+/** A root, its child, that child's three children, plus two agents on their own. */
 function crew(): PaseoAgent[] {
   return [
-    agent({ id: "overseer", labels: { "ghostline/role": "overseer" } }),
-    agent({ id: "nexus", labels: { "ghostline/role": "nexus", "paseo.parent-agent-id": "overseer" } }),
+    agent({ id: "boss", labels: { "ghostline/role": "overseer" } }),
+    agent({ id: "lead", labels: { "ghostline/role": "nexus", "paseo.parent-agent-id": "boss" } }),
     agent({ id: "solo-1" }),
-    agent({ id: "meow-a" }, "nexus"),
-    agent({ id: "meow-b" }, "nexus"),
+    agent({ id: "dev-a" }, "lead"),
+    agent({ id: "dev-b" }, "lead"),
     agent({ id: "solo-2" }),
-    agent({ id: "meow-c" }, "nexus"),
+    agent({ id: "dev-c" }, "lead"),
   ];
 }
 
@@ -122,24 +122,24 @@ describe("layoutOffice", () => {
   it("seats a crew as teams: the root with its children, then each lead's children", () => {
     const layout = office(crew(), 48);
     const room = layout.rooms[0];
-    const pod = room?.pods.find((entry) => entry.rootId === "overseer");
+    const pod = room?.pods.find((entry) => entry.rootId === "boss");
     expect(pod?.teams.map((team) => [team.leadId, team.desks.map((desk) => desk.agentId)])).toEqual([
-      ["overseer", ["overseer", "nexus"]],
-      ["nexus", ["meow-a", "meow-b", "meow-c"]],
+      ["boss", ["boss", "lead"]],
+      ["lead", ["dev-a", "dev-b", "dev-c"]],
     ]);
-    expect(layout.desks.get("meow-b")).toMatchObject({
-      seatKey: "overseer/nexus/1",
-      rootId: "overseer",
-      parentId: "nexus",
-      leadId: "nexus",
+    expect(layout.desks.get("dev-b")).toMatchObject({
+      seatKey: "boss/lead/1",
+      rootId: "boss",
+      parentId: "lead",
+      leadId: "lead",
       depth: 2,
       role: null,
       remote: false,
     });
-    expect(layout.desks.get("nexus")).toMatchObject({ leadId: "overseer", role: "Nexus", depth: 1 });
-    expect(layout.desks.get("overseer")).toMatchObject({ seatKey: "overseer/overseer/0", parentId: null });
+    expect(layout.desks.get("lead")).toMatchObject({ leadId: "boss", role: "Nexus", depth: 1 });
+    expect(layout.desks.get("boss")).toMatchObject({ seatKey: "boss/boss/0", parentId: null });
     expect(room?.pods.filter((entry) => entry.width === DESK_WIDTH).map((entry) => entry.rootId)).toEqual(["solo-1", "solo-2"]);
-    const desk = layout.desks.get("meow-a");
+    const desk = layout.desks.get("dev-a");
     expect(desk?.seat).toEqual({ x: (desk?.cell.x ?? 0) + 0.5, y: (desk?.cell.y ?? 0) + 1 });
     // It stands where it sat: in front of its own chair, in nobody's way.
     expect(desk?.stand).toEqual(desk?.seat);
@@ -168,8 +168,8 @@ describe("layoutOffice", () => {
     const grown = office(
       [
         ...agents,
-        agent({ id: "meow-d" }, "nexus"),
-        agent({ id: "helper" }, "meow-a"),
+        agent({ id: "dev-d" }, "lead"),
+        agent({ id: "helper" }, "dev-a"),
         agent({ id: "solo-3" }),
         agent({ id: "other-room", workspaceId: "ws-b" }),
       ],
@@ -177,10 +177,10 @@ describe("layoutOffice", () => {
     );
     const after = keys(grown);
     for (const [id, key] of before) expect(after.get(id)).toBe(key);
-    expect(grown.desks.get("helper")).toMatchObject({ leadId: "meow-a", seatKey: "overseer/meow-a/0" });
-    // meow-a now leads a team and still has the seat it had.
-    expect(grown.desks.get("meow-a")?.seatKey).toBe("overseer/nexus/0");
-    expect(grown.desks.get("meow-d")?.seatKey).toBe("overseer/nexus/3");
+    expect(grown.desks.get("helper")).toMatchObject({ leadId: "dev-a", seatKey: "boss/dev-a/0" });
+    // dev-a now leads a team and still has the seat it had.
+    expect(grown.desks.get("dev-a")?.seatKey).toBe("boss/lead/0");
+    expect(grown.desks.get("dev-d")?.seatKey).toBe("boss/lead/3");
   });
 
   it("orders rooms by their oldest crew, not by urgency", () => {
@@ -336,14 +336,14 @@ describe("closed agents", () => {
   const keys = (layout: Office) => Object.fromEntries([...layout.desks].map(([id, desk]) => [id, desk.seatKey]));
 
   it("have no desk: the room lists them, oldest first, at a cabinet of its own", () => {
-    const layout = office(closed(crew(), "meow-b", "solo-1"), 40);
+    const layout = office(closed(crew(), "dev-b", "solo-1"), 40);
     const room = layout.rooms[0];
     if (!room) throw new Error("fixture");
-    expect(layout.desks.has("meow-b")).toBe(false);
+    expect(layout.desks.has("dev-b")).toBe(false);
     expect(layout.desks.has("solo-1")).toBe(false);
     expect(layout.desks.size).toBe(5);
     expect(room.agentCount).toBe(5);
-    expect(room.closed?.ids).toEqual(["solo-1", "meow-b"]);
+    expect(room.closed?.ids).toEqual(["solo-1", "dev-b"]);
     // Their cabinet stands on a tile of its own, against the wall at the end of the zones.
     const at = room.closed?.at ?? { x: -1, y: -1 };
     expect(inside({ ...at, width: 1, height: 1 }, room)).toBe(true);
@@ -356,23 +356,23 @@ describe("closed agents", () => {
     expect(occupied).not.toContain(`${at.x},${at.y}`);
     expect(at.x).toBeLessThan(room.x + room.width - 1);
     // They still belong to the room.
-    expect(layout.roomOf.get("meow-b")).toBe(room.workspaceId);
+    expect(layout.roomOf.get("dev-b")).toBe(room.workspaceId);
     expect(office(crew(), 40).rooms[0]?.closed).toBeNull();
   });
 
   it("free their desk: teammates seated after them sit one desk up, and nobody else changes seat", () => {
     const before = keys(office(crew(), 40));
-    const after = keys(office(closed(crew(), "meow-a"), 40));
-    expect(after["meow-b"]).toBe("overseer/nexus/0");
-    expect(after["meow-c"]).toBe("overseer/nexus/1");
-    for (const id of ["overseer", "nexus", "solo-1", "solo-2"]) expect(after[id]).toBe(before[id]);
-    expect(after["meow-a"]).toBeUndefined();
+    const after = keys(office(closed(crew(), "dev-a"), 40));
+    expect(after["dev-b"]).toBe("boss/lead/0");
+    expect(after["dev-c"]).toBe("boss/lead/1");
+    for (const id of ["boss", "lead", "solo-1", "solo-2"]) expect(after[id]).toBe(before[id]);
+    expect(after["dev-a"]).toBeUndefined();
   });
 
   it("keep their desk while they are still walking out", () => {
-    const leaving = layoutOffice(groupByWorkspace(buildForest(closed(crew(), "meow-a"), null), new Map()), {
+    const leaving = layoutOffice(groupByWorkspace(buildForest(closed(crew(), "dev-a"), null), new Map()), {
       width: 40,
-      holding: new Set(["meow-a"]),
+      holding: new Set(["dev-a"]),
     });
     expect(keys(leaving)).toEqual(keys(office(crew(), 40)));
     expect(cells(leaving)).toEqual(cells(office(crew(), 40)));
@@ -399,13 +399,13 @@ describe("closed agents", () => {
   });
 
   it("leave their team in place when a lead closes", () => {
-    const layout = office(closed(crew(), "nexus"), 40);
-    const pod = layout.rooms[0]?.pods.find((entry) => entry.rootId === "overseer");
+    const layout = office(closed(crew(), "lead"), 40);
+    const pod = layout.rooms[0]?.pods.find((entry) => entry.rootId === "boss");
     expect(pod?.teams.map((team) => [team.leadId, team.desks.map((desk) => desk.agentId)])).toEqual([
-      ["overseer", ["overseer"]],
-      ["nexus", ["meow-a", "meow-b", "meow-c"]],
+      ["boss", ["boss"]],
+      ["lead", ["dev-a", "dev-b", "dev-c"]],
     ]);
-    expect(layout.rooms[0]?.closed?.ids).toEqual(["nexus"]);
+    expect(layout.rooms[0]?.closed?.ids).toEqual(["lead"]);
     // A closed root's parent does not come visiting for it, and a closed parent in the office is not a visitor.
     expect(layout.visitors.size).toBe(0);
   });
@@ -440,10 +440,10 @@ describe("closed agents", () => {
 });
 
 describe("visitors", () => {
-  const overseer = agent({ id: "overseer", workspaceId: "ws-home", labels: { "ghostline/role": "overseer" } });
-  const nexus = agent({ id: "nexus", labels: { "paseo.parent-agent-id": "overseer" } });
-  const meow = agent({ id: "meow" }, "nexus");
-  const all = [overseer, nexus, meow];
+  const boss = agent({ id: "boss", workspaceId: "ws-home", labels: { "ghostline/role": "overseer" } });
+  const lead = agent({ id: "lead", labels: { "paseo.parent-agent-id": "boss" } });
+  const dev = agent({ id: "dev" }, "lead");
+  const all = [boss, lead, dev];
   const directory = new Map(all.map((entry) => [entry.id, entry]));
   const panel = (extra: PaseoAgent[] = []) =>
     layoutOffice(groupByWorkspace(buildForest([...all, ...extra], "ws-a"), new Map()), {
@@ -453,12 +453,12 @@ describe("visitors", () => {
 
   it("stands a root's parent from another workspace in the lounge, without a desk", () => {
     const layout = panel();
-    expect(layout.desks.has("overseer")).toBe(false);
-    const visitor = layout.visitors.get("overseer");
+    expect(layout.desks.has("boss")).toBe(false);
+    const visitor = layout.visitors.get("boss");
     const lounge = layout.rooms[0]?.lounge;
-    expect(visitor).toMatchObject({ hostId: "nexus", workspaceId: "ws-a" });
+    expect(visitor).toMatchObject({ hostId: "lead", workspaceId: "ws-a" });
     expect(visitor && lounge && inside({ ...visitor.at, width: 1, height: 1 }, lounge)).toBe(true);
-    expect(layout.roomOf.get("overseer")).toBe("ws-a");
+    expect(layout.roomOf.get("boss")).toBe("ws-a");
   });
 
   it("moves no seat, and is absent once the parent has a room of its own", () => {
@@ -467,17 +467,17 @@ describe("visitors", () => {
     expect(cells(panel())).toEqual(cells(without));
     const everywhere = layoutOffice(groupByWorkspace(buildForest(all, null), new Map()), { width: 30, agents: directory });
     expect(everywhere.visitors.size).toBe(0);
-    expect(everywhere.desks.has("overseer")).toBe(true);
+    expect(everywhere.desks.has("boss")).toBe(true);
   });
 
   it("gives each visitor its own spot, oldest first, and one spot to a parent of two crews", () => {
-    const second = agent({ id: "second-overseer", workspaceId: "ws-home" });
+    const second = agent({ id: "second-boss", workspaceId: "ws-home" });
     const layout = panel([
       second,
-      agent({ id: "crew-2" }, "second-overseer"),
-      agent({ id: "crew-3" }, "overseer"),
+      agent({ id: "crew-2" }, "second-boss"),
+      agent({ id: "crew-3" }, "boss"),
     ]);
-    expect([...layout.visitors.keys()]).toEqual(["overseer", "second-overseer"]);
+    expect([...layout.visitors.keys()]).toEqual(["boss", "second-boss"]);
     const [first, next] = [...layout.visitors.values()];
     expect(first?.at).not.toEqual(next?.at);
     // From the right wall inwards along the walkway.
@@ -486,11 +486,11 @@ describe("visitors", () => {
 
   it("shows a visitor standing, with the emote of its state", () => {
     const layout = panel();
-    const waiting = { ...overseer, pendingPermissions: [{ id: "p" }] } as PaseoAgent;
-    const map = presences(layout, new Map([...directory, ["overseer", waiting]]), crewState, 0);
-    expect(map.get("overseer")).toMatchObject({
+    const waiting = { ...boss, pendingPermissions: [{ id: "p" }] } as PaseoAgent;
+    const map = presences(layout, new Map([...directory, ["boss", waiting]]), crewState, 0);
+    expect(map.get("boss")).toMatchObject({
       activity: "visiting",
-      at: layout.visitors.get("overseer")?.at,
+      at: layout.visitors.get("boss")?.at,
       visible: true,
       seated: false,
       emote: "question",
@@ -858,7 +858,7 @@ describe("shareOffice and sharePresences", () => {
     const untouched = after.rooms.filter((entry) => before.rooms.includes(entry));
     expect(untouched.length).toBeGreaterThan(0);
     for (const entry of untouched) expect(entry).toEqual(room(fresh, entry.workspaceId));
-    expect(after.desks.get("meow-a")).toBe(before.desks.get("meow-a"));
+    expect(after.desks.get("dev-a")).toBe(before.desks.get("dev-a"));
     expect(after.desks.has("other-2")).toBe(true);
   });
 
@@ -866,11 +866,11 @@ describe("shareOffice and sharePresences", () => {
     const agents = crew();
     const layout = office(agents, 31);
     const before = presences(layout, directory(agents), crewState, 0);
-    const changed = agents.map((entry) => (entry.id === "meow-b" ? { ...entry, status: "running" as const } : entry));
+    const changed = agents.map((entry) => (entry.id === "dev-b" ? { ...entry, status: "running" as const } : entry));
     const after = sharePresences(before, presences(layout, directory(changed), crewState, 0));
-    expect(after.get("meow-a")).toBe(before.get("meow-a"));
-    expect(after.get("meow-b")).not.toBe(before.get("meow-b"));
-    expect(after.get("meow-b")?.activity).toBe("typing");
+    expect(after.get("dev-a")).toBe(before.get("dev-a"));
+    expect(after.get("dev-b")).not.toBe(before.get("dev-b"));
+    expect(after.get("dev-b")?.activity).toBe("typing");
     expect(sharePresences(before, presences(layout, directory(agents), crewState, 0))).toBe(before);
   });
 });

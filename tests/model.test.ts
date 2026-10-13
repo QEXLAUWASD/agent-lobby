@@ -53,7 +53,7 @@ describe("crewState", () => {
 });
 
 describe("buildForest", () => {
-  const root = agent({ id: "root", title: "Nexus", createdAt: "2026-09-22T09:00:00.000Z" });
+  const root = agent({ id: "root", title: "Lead", createdAt: "2026-09-22T09:00:00.000Z" });
   const childHere = agent({ id: "c1", labels: { "paseo.parent-agent-id": "root" }, status: "running" });
   const childElsewhere = agent({
     id: "c2",

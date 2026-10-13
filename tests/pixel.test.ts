@@ -248,7 +248,7 @@ describe("palette", () => {
   });
 
   it("gives an id one look, and a crowd many", () => {
-    expect(lookFor("a1b2c3d4")).toEqual(lookFor("a1b2c3d4"));
+    expect(lookFor("1a2b3c4d")).toEqual(lookFor("1a2b3c4d"));
     const looks = new Set(Array.from({ length: 40 }, (_, index) => JSON.stringify(lookFor(`agent-${index}`))));
     expect(looks.size).toBeGreaterThanOrEqual(36);
   });

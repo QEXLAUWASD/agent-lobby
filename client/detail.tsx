@@ -89,9 +89,11 @@ export function Detail({
   const facts: Array<[string, string]> = [];
   if (workspaceName) facts.push(["Workspace", workspaceName]);
   facts.push(["Directory", agent.cwd]);
-  for (const key of ["team/room", "team/owner", "team/scope", "team/concern"]) {
+  // Labels are shown as they are, under their last segment; Paseo's own bookkeeping labels are not.
+  for (const key of Object.keys(agent.labels).sort()) {
     const value = agent.labels[key];
-    if (value) facts.push([key.slice("team/".length), value]);
+    if (!value || key.startsWith("paseo.")) continue;
+    facts.push([key.slice(key.lastIndexOf("/") + 1), value]);
   }
   if (agent.lastError) facts.push(["Last error", agent.lastError]);
   return (
