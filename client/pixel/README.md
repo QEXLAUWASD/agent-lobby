@@ -1,6 +1,6 @@
 # client/pixel
 
-The pixel-art renderer for the Crew office: sprites drawn as code, a palette taken from the Paseo
+The pixel-art renderer for the office: sprites drawn as code, a palette taken from the Paseo
 theme, and a PNG encoder that turns the two into images without canvas, DOM or assets.
 
 ## Art and licence

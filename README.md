@@ -160,5 +160,3 @@ paseo plugin reload lobby    # recompile and reload in the running app
   archived, the rest simply go.
 - Bubbles drop Vietnamese tone marks and other accents (`Lỗi` reads `Loi`), and at this size their
   text is something to lean in for, not to read across the room.
-- The plugin's id changed from `crew` to `lobby`: a Crew tab saved in a workspace layout by an
-  earlier version does not carry over and has to be opened again.

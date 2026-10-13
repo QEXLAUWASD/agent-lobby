@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "A Paseo plugin that shows your agents as a small pixel-art office: who is working, who is waiting for you, who has finished.",
-  "keywords": ["paseo", "paseo-plugin", "agents", "lobby", "crew", "pixel-art"],
+  "keywords": ["paseo", "paseo-plugin", "agents", "lobby", "office", "pixel-art"],
   "license": "MIT",
   "engines": {
     "node": ">=24"
