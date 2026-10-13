@@ -6,6 +6,7 @@ import {
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
   actFrame,
+  bubbleClearance,
   bubbleTrack,
   characterLabel,
   highlighted,
@@ -288,8 +289,18 @@ describe("bubbleTrack and spotOf", () => {
     expect(follow(track.x, 630)).toBe(640 - 100 - 2);
     expect(track.x.fixed).toBeNull();
     // Above the head: top = y - (half a tile of head + bubble + gap), never negative.
-    expect(follow(track.y, 320, false)).toBeCloseTo(320 - (16 + 20 + 4));
+    expect(follow(track.y, 320, false)).toBeCloseTo(320 - (16 + 20 + 2));
     expect(follow(track.y, 10, false)).toBe(0);
+  });
+
+  it("floats clear of what must stay in view: the monitor at a desk, the emote over a head", () => {
+    const plain = bubbleTrack(40, 17, 20, 640);
+    const cleared = bubbleTrack(40, 17, 20, 640, bubbleClearance("seat", false) * 20);
+    // The same bubble sits a tile and a quarter higher over somebody at a desk.
+    expect(follow(plain.y, 300, false) - follow(cleared.y, 300, false)).toBeCloseTo(1.25 * 20 - 2);
+    expect(bubbleClearance("stand", true)).toBe(bubbleClearance("seat", false));
+    expect(bubbleClearance("lounge", true)).toBeGreaterThan(bubbleClearance("lounge", false));
+    expect(bubbleClearance("lounge", true)).toBeLessThan(bubbleClearance("seat", true));
   });
 
   it("pins a bubble wider than the office to its left edge", () => {

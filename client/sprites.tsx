@@ -6,7 +6,6 @@ import {
   BUBBLE_MAX_WIDTH,
   archiveLevel,
   bubbleSize as artBubbleSize,
-  deviceBubbleScale,
   tag,
   Sprite,
   anchored,
@@ -220,23 +219,24 @@ export interface BubbleArt {
 }
 
 /**
- * Bubbles and count plates are drawn at a scale of their own, so that their
- * words stay readable however small the room is.
+ * Bubbles and count plates are drawn at the room's own scale, so that a
+ * one-word bubble is about as wide as the character it belongs to and nothing
+ * said is larger than whoever says it. The words are small; the full line is
+ * on the accessibility label.
  */
-const textScale = () => deviceBubbleScale();
 
-/** The most a bubble may take of a width of `availablePx`, in its own art pixels. */
-function bubbleMaxWidth(availablePx: number): number {
-  return Math.max(24, Math.min(BUBBLE_MAX_WIDTH, Math.floor((availablePx - 8) / textScale())));
+/** The most a bubble may take of a width of `availablePx`, in art pixels. */
+function bubbleMaxWidth(tile: number, availablePx: number): number {
+  return Math.max(24, Math.min(BUBBLE_MAX_WIDTH, Math.floor((availablePx - 8) / artScale(tile))));
 }
 
 /**
  * A bubble's size in layout pixels, without drawing it. The catalogue folds
  * the text to its font, wraps it to at most three lines and cuts the rest.
  */
-export function bubbleSize(art: BubbleArt, availablePx: number): { width: number; height: number } {
-  const scale = textScale();
-  const size = artBubbleSize({ ...art, maxWidth: bubbleMaxWidth(availablePx) });
+export function bubbleSize(art: BubbleArt, tile: number, availablePx: number): { width: number; height: number } {
+  const scale = artScale(tile);
+  const size = artBubbleSize({ ...art, maxWidth: bubbleMaxWidth(tile, availablePx) });
   return { width: size.width * scale, height: size.height * scale };
 }
 
@@ -247,12 +247,13 @@ export function bubbleSize(art: BubbleArt, availablePx: number): { width: number
  */
 export const BubbleSprite = memo(function BubbleSprite({
   theme,
+  tile,
   art,
   availablePx,
   tail,
-}: Pick<SpriteProps, "theme"> & { art: BubbleArt; availablePx: number; tail: number }) {
-  const scale = textScale();
-  const bitmap = bubble({ ...art, maxWidth: bubbleMaxWidth(availablePx), tailX: Math.round(tail / scale) });
+}: SpriteProps & { art: BubbleArt; availablePx: number; tail: number }) {
+  const scale = artScale(tile);
+  const bitmap = bubble({ ...art, maxWidth: bubbleMaxWidth(tile, availablePx), tailX: Math.round(tail / scale) });
   return <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} />;
 });
 
@@ -270,17 +271,11 @@ export const ArchiveSprite = memo(function ArchiveSprite({
   const scale = artScale(tile);
   const cabinet = prop("archive", { level: archiveLevel(count) });
   const plate = tag(label);
-  const plateScale = textScale();
   const top = tile - cabinet.height * scale;
   return (
     <View style={{ width: tile, height: tile }}>
       <Sprite sprite={cabinet} palette={officePalette(theme)} scale={scale} style={anchored(cabinet, scale, tile / 2, tile)} />
-      <Sprite
-        sprite={plate}
-        palette={officePalette(theme)}
-        scale={plateScale}
-        style={anchored(plate, plateScale, tile / 2, deviceSnap(top - 1))}
-      />
+      <Sprite sprite={plate} palette={officePalette(theme)} scale={scale} style={anchored(plate, scale, tile / 2, top - scale)} />
     </View>
   );
 });

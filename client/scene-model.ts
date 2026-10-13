@@ -300,12 +300,14 @@ export function bubbleTrack(
   bubbleHeight: number,
   tile: number,
   officeWidthPx: number,
+  /** How far above the head the bubble's tail ends, in pixels: room for what must stay in view. */
+  clearPx = 0,
 ): { x: Track & { fixed: number | null }; y: Track } {
   const min = 2;
   const max = officeWidthPx - bubbleWidth - 2;
   // left = x + tile / 2 - width / 2, held within [min, max].
   const shift = tile / 2 - bubbleWidth / 2;
-  const lift = (CHARACTER_HEIGHT - 1) * tile + bubbleHeight + 4;
+  const lift = (CHARACTER_HEIGHT - 1) * tile + bubbleHeight + Math.max(2, clearPx);
   return {
     x: { inputRange: [min - shift, Math.max(min, max) - shift + (max <= min ? 1 : 0)], outputRange: [min, Math.max(min, max) + (max <= min ? 1 : 0)], fixed: max <= min ? min : null },
     // top = y - lift, never above the office.
@@ -340,6 +342,16 @@ export function roomsInView(office: Office, top: number, bottom: number): string
   return office.rooms
     .filter((room) => room.y < bottom && room.y + room.height > top)
     .map((room) => room.workspaceId);
+}
+
+/**
+ * How far above its speaker's head a bubble floats, in tiles. At a desk it
+ * clears the monitor, so the screen's state and the emote beside the head stay
+ * in view; away from one it clears the emote over the head, if there is one.
+ */
+export function bubbleClearance(spot: Spot, hasEmote: boolean): number {
+  if (spot === "seat" || spot === "stand") return 1.25;
+  return hasEmote ? 0.8 : 0.1;
 }
 
 /** Every node of a forest by agent id. */

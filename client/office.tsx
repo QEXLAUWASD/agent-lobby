@@ -20,6 +20,7 @@ import {
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
   actFrame,
+  bubbleClearance,
   bubbleTrack,
   characterLabel,
   linkBetween,
@@ -509,6 +510,7 @@ const SpeechBubble = memo(function SpeechBubble({
   bubble,
   position,
   home,
+  clearance,
   officeWidth,
   still: reduced,
 }: {
@@ -519,6 +521,8 @@ const SpeechBubble = memo(function SpeechBubble({
   position: Animated.ValueXY;
   /** The speaker's tile at rest, for the tail. */
   home: Point;
+  /** Tiles to keep clear between the head and the bubble. */
+  clearance: number;
   officeWidth: number;
   still: boolean;
 }) {
@@ -537,8 +541,11 @@ const SpeechBubble = memo(function SpeechBubble({
     [bubble.text, bubble.tone, bubble.status],
   );
   const available = officeWidth - 4;
-  const { width, height } = bubbleSize(art, available);
-  const track = useMemo(() => bubbleTrack(width, height, tile, officeWidth), [width, height, tile, officeWidth]);
+  const { width, height } = bubbleSize(art, tile, available);
+  const track = useMemo(
+    () => bubbleTrack(width, height, tile, officeWidth, clearance * tile),
+    [width, height, tile, officeWidth, clearance],
+  );
   // Where the speaker's head is under the bubble once the bubble has been kept inside the office.
   const centre = (home.x + 0.5) * tile;
   const left = Math.min(Math.max(2, centre - width / 2), Math.max(2, officeWidth - width - 2));
@@ -570,7 +577,7 @@ const SpeechBubble = memo(function SpeechBubble({
         ],
       }}
     >
-      <BubbleSprite theme={theme} art={art} availablePx={available} tail={centre - left} />
+      <BubbleSprite theme={theme} tile={tile} art={art} availablePx={available} tail={centre - left} />
     </Animated.View>
   );
 });
@@ -1046,6 +1053,7 @@ export function OfficeScene({
                 bubble={bubble}
                 position={position}
                 home={member.places[spotOf(member.presence.activity)].at}
+                clearance={bubbleClearance(spotOf(member.presence.activity), member.presence.emote !== null)}
                 officeWidth={width}
                 still={reduced}
               />
