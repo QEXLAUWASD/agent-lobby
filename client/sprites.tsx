@@ -211,9 +211,9 @@ export const CharacterSprite = memo(function CharacterSprite({
   );
 });
 
-// A sleeper's Zs drift; the rest hold still.
-const EMOTE: Record<Emote, EmoteId> = { question: "question", alert: "fail", check: "check", zzz: "zzz" };
-const EMOTE_MS: Partial<Record<Emote, number>> = { zzz: FRAME_MS.zzz };
+// What is finished bobs gently until it is read; a sleeper's Zs drift; the rest hold still.
+const EMOTE: Record<Emote, EmoteId> = { question: "question", alert: "fail", check: "readyBob", zzz: "zzz" };
+const EMOTE_MS: Partial<Record<Emote, number>> = { check: FRAME_MS.readyBob, zzz: FRAME_MS.zzz };
 
 /** How many frames each loop has, for whoever runs it. */
 export const WALK_FRAMES = CHARACTER_FRAMES.walk;
