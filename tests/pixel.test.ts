@@ -360,8 +360,31 @@ describe("props, tiles and emotes", () => {
     expect(new Set([colours("floor"), colours("carpet"), colours("kitchen")]).size).toBe(3);
   });
 
+  it("makes the partition stand off the floor on both themes", () => {
+    for (const theme of [LIGHT, DARK]) {
+      const palette = officePalette(theme);
+      for (const floor of ["floor", "floorAlt", "carpet", "kitchen"] as const) {
+        expect(contrast(paletteColor(palette, "partition"), paletteColor(palette, floor)), floor).toBeGreaterThan(3);
+      }
+    }
+    // No border pixels: every edge is the same two fills, so tiles join in any direction.
+    const fills = new Set([slotIndex("partition"), slotIndex("partitionShade")]);
+    expect([...tile("partition").pixels].every((value) => fills.has(value))).toBe(true);
+  });
+
+  it("opens a doorway onto the floor", () => {
+    const floor = slotIndex("floor");
+    const opening = (id: "door" | "doorway", y: number) =>
+      [...tile(id).pixels.slice(y * 16, (y + 1) * 16)].filter((value) => value === floor).length;
+    expect(opening("doorway", 0)).toBe(10);
+    expect(opening("door", 0)).toBe(0);
+    expect(opening("door", 15)).toBe(10);
+    // The jambs line up, so door over doorway is one opening.
+    expect([...tile("door").pixels.slice(15 * 16)]).toEqual([...tile("doorway").pixels.slice(0, 16)]);
+  });
+
   it("draws square tiles with no holes", () => {
-    for (const id of ["floor", "floorAlt", "wall", "wallCap", "carpet", "kitchen"] as const) {
+    for (const id of ["floor", "floorAlt", "wall", "wallCap", "carpet", "kitchen", "partition", "door", "doorway"] as const) {
       const sprite = tile(id);
       expect([sprite.width, sprite.height]).toEqual([TILE, TILE]);
       expect(opaque(sprite).every(Boolean)).toBe(true);

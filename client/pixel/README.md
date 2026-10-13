@@ -42,7 +42,7 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | lowTable | 16 × 7 | bottom centre | 1 |
 | beanbag | 16 × 12 | bottom centre | 1 |
 | rug (flat, drawn right after the floor) | 32 × 16 | bottom centre | 1 |
-| floor, floorAlt, wall, wallCap, carpet, kitchen | 16 × 16 | 0, 0 | 1 |
+| floor, floorAlt, wall, wallCap, carpet, kitchen, partition, door, doorway | 16 × 16 | 0, 0 | 1 |
 | bubble | text width + chrome (9 to `maxWidth`, default 120) × 15 | `tailX`, 15 (tip of the tail) | 1 |
 
 Put a character's anchor on the bottom centre of the tile it stands or sits on. A seated character
@@ -53,6 +53,16 @@ ignores facing.
 Roles differ in outline, not only colour: the overseer has a brimmed hat and a cape, the nexus a
 headset with an antenna, a meow cat ears and a tail, a plain agent none of these. `lookFor(agentId)`
 picks skin, hair, hair style, shirt and trousers, the same every time for the same id.
+
+## Walls and doors
+
+`wall` is a wall's front face, for the band under the top of a room. `partition` is a wall seen from
+above, for outlining rooms and dividing neighbours: it leans well toward the text
+colour on either theme, and has no border, so it joins along rows, down columns and round corners.
+`wallCap` is the older, paler top and is kept for callers that want a quiet edge.
+
+A door through the top wall is `door` in the wall's top row (lintel, jambs, floor showing) with
+`doorway` in each wall-face row beneath it, so the opening runs down to the room's floor.
 
 ## Zones and use points
 
@@ -110,7 +120,7 @@ Every cache is bounded. Drawings and images dropped from one are made again on t
 | room composites | 32 most recently used, and 8 million pixels in total |
 | bubbles | 256 most recently used |
 | data URIs | 1024 most recently used, and 6 million characters in total |
-| props, tiles, emotes | the fixed set of drawings: 33 |
+| props, tiles, emotes | the fixed set of drawings: 36 |
 | palettes | one per theme object, held weakly |
 
 Use `composite` to flatten a room's floor, walls and furniture into one bitmap, so the backdrop

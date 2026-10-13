@@ -38,6 +38,8 @@ export const PROP_LEGEND: Legend = {
   "8": "carpetShade",
   "9": "kitchen",
   "0": "kitchenAlt",
+  q: "partition",
+  Q: "partitionShade",
 };
 
 export type ScreenState = "lit" | "off" | "error";
@@ -56,7 +58,16 @@ export type PropId =
   | "lowTable"
   | "beanbag"
   | "rug";
-export type TileId = "floor" | "floorAlt" | "wall" | "wallCap" | "carpet" | "kitchen";
+export type TileId =
+  | "floor"
+  | "floorAlt"
+  | "wall"
+  | "wallCap"
+  | "carpet"
+  | "kitchen"
+  | "partition"
+  | "door"
+  | "doorway";
 
 /** An office chair seen from behind, one tile. Seated back-view characters carry the same drawing. */
 export const CHAIR_ROWS = [
@@ -354,6 +365,16 @@ const KITCHEN_ROWS = Array.from({ length: 16 }, (_, y) =>
   Array.from({ length: 16 }, (_, x) => ((x >> 3) + (y >> 3)) % 2 ? "0" : "9").join(""),
 );
 
+// A dividing wall seen from above. It has no edge of its own, so it joins along a row, down a
+// column and round a corner without a seam.
+const PARTITION_ROWS = Array.from({ length: 16 }, (_, y) =>
+  Array.from({ length: 16 }, (_, x) => ((x + y) % 8 === 0 ? "Q" : "q")).join(""),
+);
+// A doorway through a wall across the top of a room: floor between two jambs. `door` has the lintel
+// and goes in the wall's top row; `doorway` continues the opening through any wall-face rows below.
+const DOORWAY_ROWS = Array.from({ length: 16 }, () => row("odo", ["1", 10], "odo"));
+const DOOR_ROWS = [row(["o", 16]), row("o", ["l", 14], "o"), row("o", ["d", 14], "o"), row(["o", 16]), ...DOORWAY_ROWS.slice(4)];
+
 const FLOOR_ROWS = [...Array.from({ length: 15 }, () => row(["1", 15], "3")), row(["3", 16])];
 const FLOOR_ALT_ROWS = FLOOR_ROWS.map((line) => line.replace(/1/g, "2"));
 const WALL_ROWS = [
@@ -482,6 +503,9 @@ const TILE_ROWS: Readonly<Record<TileId, readonly string[]>> = {
   wallCap: WALL_CAP_ROWS,
   carpet: CARPET_ROWS,
   kitchen: KITCHEN_ROWS,
+  partition: PARTITION_ROWS,
+  door: DOOR_ROWS,
+  doorway: DOORWAY_ROWS,
 };
 
 function drawDesk(screen: ScreenState, frame: number) {

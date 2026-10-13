@@ -85,6 +85,8 @@ const FIXED_SLOTS = [
   "carpetShade",
   "kitchen",
   "kitchenAlt",
+  "partition",
+  "partitionShade",
 ] as const;
 
 export type Slot =
@@ -212,6 +214,9 @@ function build(theme: PluginTheme): Palette {
     carpetShade: mix(surface1, fabric, 0.34),
     kitchen: mix(surface1, glass, 0.12),
     kitchenAlt: mix(mix(surface1, glass, 0.12), foreground, 0.07),
+    // Room dividers lean well toward the text colour, so they stand off the floor on either theme.
+    partition: mix(surface1, foreground, 0.6),
+    partitionShade: mix(surface1, foreground, 0.72),
   };
   SKINS.forEach((hex, index) => {
     colors[`skin${index}`] = parseColor(hex);
