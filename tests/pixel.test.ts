@@ -17,7 +17,7 @@ import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "..
 import { Lru } from "../client/pixel/lru";
 import { SLOTS, lookFor, officePalette, paletteColor, slotIndex } from "../client/pixel/palette";
 import { adler32, crc32, deflate, encodeIndexedPng, pngDataUri, toBase64, upscale, type Rgba } from "../client/pixel/png";
-import { PROPS, TILE, prop, tile, type PropId, type ScreenState } from "../client/pixel/props";
+import { PROPS, PROP_USES, TILE, prop, tile, type PropId, type ScreenState } from "../client/pixel/props";
 import { fitText, foldText, textWidth } from "../client/pixel/text";
 
 const LIGHT: PluginTheme = {
@@ -55,7 +55,22 @@ const ROLES: CharacterRole[] = ["overseer", "nexus", "meow", "agent"];
 const POSES: CharacterPose[] = ["idle", "walk", "sit", "sleep"];
 const FACINGS: Facing[] = ["down", "up", "left", "right"];
 const EMOTES: EmoteId[] = ["alert", "question", "fail", "check", "zzz", "thinking"];
-const PROP_IDS: PropId[] = ["desk", "chair", "plant", "coffee", "sofa", "water", "envelope"];
+const PROP_IDS: PropId[] = [
+  "desk",
+  "chair",
+  "plant",
+  "coffee",
+  "sofa",
+  "water",
+  "envelope",
+  "fridge",
+  "counter",
+  "table",
+  "bookshelf",
+  "lowTable",
+  "beanbag",
+  "rug",
+];
 const LOOK = lookFor("agent-1");
 const bytes = (text: string) => Uint8Array.from(Buffer.from(text, "latin1"));
 
@@ -265,6 +280,16 @@ describe("characters", () => {
     expect(left.pixels).not.toEqual(right.pixels);
   });
 
+  it("puts a cup in the hand, except from behind", () => {
+    const empty = character({ role: "agent", look: LOOK });
+    const holding = character({ role: "agent", look: LOOK, carry: "cup" });
+    expect(difference([...empty.pixels], [...holding.pixels])).toBeGreaterThanOrEqual(8);
+    expect(holding).toBe(character({ role: "agent", look: LOOK, carry: "cup" }));
+    expect(character({ role: "agent", look: LOOK, facing: "up", carry: "cup" }).pixels).toEqual(
+      character({ role: "agent", look: LOOK, facing: "up" }).pixels,
+    );
+  });
+
   it("shows a different person for a different look", () => {
     const one = character({ role: "meow", look: { skin: 0, hair: 0, hairStyle: 0, shirt: 0, pants: 0 } });
     const other = character({ role: "meow", look: { skin: 3, hair: 4, hairStyle: 1, shirt: 5, pants: 2 } });
@@ -301,8 +326,42 @@ describe("props, tiles and emotes", () => {
     expect(prop("desk", { screen: "off", frame: 3 })).toBe(prop("desk"));
   });
 
+  it("lists use points that fit each prop", () => {
+    for (const id of PROP_IDS) {
+      const seats = PROP_USES[id].filter((point) => point.dy === 0 && point.pose === "sit");
+      for (const point of PROP_USES[id]) {
+        expect(Number.isInteger(point.dx) && Number.isInteger(point.dy), id).toBe(true);
+        // Seats are on the prop, and low enough that the sitter's feet stay inside its height.
+        if (point.pose === "sit") expect(point.dx >= 0 && point.dx < PROPS[id].tilesWide && point.dy === 0, id).toBe(true);
+        expect(point.lift, id).toBeLessThan(PROPS[id].height);
+      }
+      expect(seats.length, id).toBeLessThanOrEqual(PROPS[id].tilesWide);
+    }
+    expect(PROP_USES.sofa).toHaveLength(2);
+    expect(new Set(PROP_USES.table.map((point) => point.facing))).toEqual(new Set(["left", "right"]));
+  });
+
+  it("lines the counter up with the coffee machine's cabinets", () => {
+    // Both stand ten rows of cabinet on the floor, so side by side they read as one run.
+    const top = slotIndex("woodLight");
+    const worktop = (id: PropId) => {
+      const sprite = prop(id);
+      const y = sprite.height - 9;
+      return [...sprite.pixels.slice(y * sprite.width, (y + 1) * sprite.width)].filter((value) => value === top).length;
+    };
+    expect(worktop("coffee")).toBeGreaterThan(8);
+    expect(worktop("counter")).toBeGreaterThan(16);
+  });
+
+  it("tells the zone floors apart from the plain floor and from each other", () => {
+    const palette = officePalette(DARK);
+    const colours = (id: "floor" | "carpet" | "kitchen") =>
+      [...new Set(tile(id).pixels)].map((index) => palette.colors[index]!.join(",")).sort().join(" ");
+    expect(new Set([colours("floor"), colours("carpet"), colours("kitchen")]).size).toBe(3);
+  });
+
   it("draws square tiles with no holes", () => {
-    for (const id of ["floor", "floorAlt", "wall", "wallCap"] as const) {
+    for (const id of ["floor", "floorAlt", "wall", "wallCap", "carpet", "kitchen"] as const) {
       const sprite = tile(id);
       expect([sprite.width, sprite.height]).toEqual([TILE, TILE]);
       expect(opaque(sprite).every(Boolean)).toBe(true);

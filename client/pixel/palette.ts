@@ -81,6 +81,10 @@ const FIXED_SLOTS = [
   "emoteIdleInk",
   "emoteThinking",
   "emoteThinkingInk",
+  "carpet",
+  "carpetShade",
+  "kitchen",
+  "kitchenAlt",
 ] as const;
 
 export type Slot =
@@ -203,6 +207,11 @@ function build(theme: PluginTheme): Palette {
     emoteReadyInk: inkOn(status.emoteReady),
     emoteIdleInk: inkOn(status.emoteIdle),
     emoteThinkingInk: inkOn(status.emoteThinking),
+    // Zone floors stay close to the plain floor: enough to mark a zone, not enough to fight it.
+    carpet: mix(surface1, fabric, 0.22),
+    carpetShade: mix(surface1, fabric, 0.34),
+    kitchen: mix(surface1, glass, 0.12),
+    kitchenAlt: mix(mix(surface1, glass, 0.12), foreground, 0.07),
   };
   SKINS.forEach((hex, index) => {
     colors[`skin${index}`] = parseColor(hex);

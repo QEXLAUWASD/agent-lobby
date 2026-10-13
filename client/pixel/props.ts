@@ -34,11 +34,29 @@ export const PROP_LEGEND: Legend = {
   "4": "wall",
   "5": "wallShade",
   "6": "wallTrim",
+  "7": "carpet",
+  "8": "carpetShade",
+  "9": "kitchen",
+  "0": "kitchenAlt",
 };
 
 export type ScreenState = "lit" | "off" | "error";
-export type PropId = "desk" | "chair" | "plant" | "coffee" | "sofa" | "water" | "envelope";
-export type TileId = "floor" | "floorAlt" | "wall" | "wallCap";
+export type PropId =
+  | "desk"
+  | "chair"
+  | "plant"
+  | "coffee"
+  | "sofa"
+  | "water"
+  | "envelope"
+  | "fridge"
+  | "counter"
+  | "table"
+  | "bookshelf"
+  | "lowTable"
+  | "beanbag"
+  | "rug";
+export type TileId = "floor" | "floorAlt" | "wall" | "wallCap" | "carpet" | "kitchen";
 
 /** An office chair seen from behind, one tile. Seated back-view characters carry the same drawing. */
 export const CHAIR_ROWS = [
@@ -226,6 +244,116 @@ const SOFA_ROWS = [
   row(".ooo", [".", 24], "ooo."),
 ];
 
+const FRIDGE_ROWS = [
+  "..oooooooooooo..",
+  "..onnnnnnnnnno..",
+  "..onnnnnnnnnmo..",
+  "..onMnnnnnnnmo..",
+  "..onMnnnnnnnmo..",
+  "..onMnnnnnnnmo..",
+  "..onnnnnnnnnmo..",
+  "..onnnnnnnnnmo..",
+  "..oooooooooooo..",
+  "..onnnnnnnnnmo..",
+  "..onMnnnnnnnmo..",
+  "..onMnnnnwwnmo..",
+  "..onMnnnnwwnmo..",
+  "..onMnnnnnnnmo..",
+  "..onMnnnnennmo..",
+  ...Array.from({ length: 10 }, () => "..onnnnnnnnnmo.."),
+  "..ommmmmmmmmmo..",
+  "..oooooooooooo..",
+];
+
+// Cabinets at the height of the coffee machine's, so the two stand as one run. The sink is on top.
+const COUNTER_ROWS = [
+  row([".", 13], "oooo", [".", 15]),
+  row([".", 13], "oMMo", [".", 15]),
+  row([".", 13], "oMoo", [".", 15]),
+  row(".", ["o", 30], "."),
+  row(".o", ["l", 9], "oMMMMMMo", ["l", 11], "o."),
+  row(".", ["o", 30], "."),
+  row(".o", ["d", 9], "o", ["d", 8], "o", ["d", 9], "o."),
+  row(".o", ["d", 9], "o", ["d", 8], "o", ["d", 9], "o."),
+  row(".o", ["d", 8], "non", ["d", 6], "non", ["d", 8], "o."),
+  row(".o", ["d", 9], "o", ["d", 8], "o", ["d", 9], "o."),
+  row(".o", ["d", 9], "o", ["d", 8], "o", ["d", 9], "o."),
+  row(".o", ["D", 9], "o", ["D", 8], "o", ["D", 9], "o."),
+  row(".", ["o", 30], "."),
+];
+
+/** A standing table for the pantry. */
+const TABLE_ROWS = [
+  "...oooooooooo...",
+  "..ollllllllllo..",
+  "..oddddddddddo..",
+  "...oooooooooo...",
+  ...Array.from({ length: 9 }, () => "......oMMo......"),
+  "....oooMMooo....",
+  "...oMMMMMMMMo...",
+  "...oooooooooo...",
+];
+
+const SPINES = ["ffppggaaFFuuDDGGcceeAAwwDDPP", "ppDDaaffggPPuuwwDDeeFFccGGaa", "GGwwffDDppaaeeccFFDDuuggPPff"];
+/** The top row of a shelf: every third book is a pixel shorter. */
+const shortBooks = (spines: string) => spines.replace(/../g, (pair, at: number) => ((at / 2) % 3 === 1 ? "DD" : pair));
+const BOOKSHELF_ROWS = [
+  row(["o", 32]),
+  row("o", ["l", 30], "o"),
+  ...SPINES.flatMap((spines) => [
+    row("oD", shortBooks(spines), "Do"),
+    ...Array.from({ length: 5 }, () => row("oD", spines, "Do")),
+    row("o", ["l", 30], "o"),
+  ]),
+  ...Array.from({ length: 3 }, () => row("o", ["d", 30], "o")),
+  row("o", ["D", 30], "o"),
+  row(["o", 32]),
+];
+
+const LOW_TABLE_ROWS = [
+  ".oooooooooooooo.",
+  ".olllwwwllllllo.",
+  ".oddddddddddddo.",
+  ".oooooooooooooo.",
+  "..oDo......oDo..",
+  "..oDo......oDo..",
+  "..ooo......ooo..",
+];
+
+const BEANBAG_ROWS = [
+  ".....oooooo.....",
+  "...oouuuuuuoo...",
+  "..ouuffffffuuo..",
+  ".ouffffffffffuo.",
+  ".offffFFFFffffo.",
+  "offfFFFFFFFFfffo",
+  "offffffffffffffo",
+  "offffffffffffffo",
+  "oFffffffffffffFo",
+  "oFFffffffffffFFo",
+  ".oFFFFFFFFFFFFo.",
+  "..oooooooooooo..",
+];
+
+/** Lies flat: draw it straight after the floor, under everything else. */
+const RUG_ROWS = [
+  row("..", ["P", 28], ".."),
+  row(".P", ["p", 28], "P."),
+  row("Pp", ["l", 28], "pP"),
+  ...Array.from({ length: 10 }, () => row("Ppl", ["p", 26], "lpP")),
+  row("Pp", ["l", 28], "pP"),
+  row(".P", ["p", 28], "P."),
+  row("..", ["P", 28], ".."),
+];
+
+// Zone floors: a speckled carpet for the lounge, small checkers for the pantry.
+const CARPET_ROWS = Array.from({ length: 16 }, (_, y) =>
+  Array.from({ length: 16 }, (_, x) => ((x * 5 + y * 3) % 8 === 0 ? "8" : "7")).join(""),
+);
+const KITCHEN_ROWS = Array.from({ length: 16 }, (_, y) =>
+  Array.from({ length: 16 }, (_, x) => ((x >> 3) + (y >> 3)) % 2 ? "0" : "9").join(""),
+);
+
 const FLOOR_ROWS = [...Array.from({ length: 15 }, () => row(["1", 15], "3")), row(["3", 16])];
 const FLOOR_ALT_ROWS = FLOOR_ROWS.map((line) => line.replace(/1/g, "2"));
 const WALL_ROWS = [
@@ -263,6 +391,46 @@ export interface PropInfo {
   readonly frames: number;
 }
 
+/** Where a character goes to use a prop, so the layout and the art agree on one table. */
+export interface UsePoint {
+  /** Tiles from the prop's leftmost tile; `dy` 1 is the tile in front of it. */
+  readonly dx: number;
+  readonly dy: number;
+  readonly pose: "idle" | "sit";
+  readonly facing: "up" | "down" | "left" | "right";
+  /** Art pixels to raise the character so it sits on the seat instead of the floor. */
+  readonly lift: number;
+}
+
+const use = (dx: number, dy: number, pose: UsePoint["pose"], facing: UsePoint["facing"], lift = 0): UsePoint => ({
+  dx,
+  dy,
+  pose,
+  facing,
+  lift,
+});
+
+/**
+ * A character on a prop's own tile (`dy` 0) is drawn after the prop. Props with no entry are
+ * scenery: nobody stands on their tiles.
+ */
+export const PROP_USES: Readonly<Record<PropId, readonly UsePoint[]>> = {
+  desk: [],
+  chair: [],
+  envelope: [],
+  plant: [],
+  lowTable: [],
+  rug: [],
+  sofa: [use(0, 0, "sit", "down", 4), use(1, 0, "sit", "down", 4)],
+  beanbag: [use(0, 0, "sit", "down", 3)],
+  coffee: [use(0, 1, "idle", "up")],
+  water: [use(0, 1, "idle", "up")],
+  fridge: [use(0, 1, "idle", "up")],
+  counter: [use(0, 1, "idle", "up"), use(1, 1, "idle", "up")],
+  bookshelf: [use(0, 1, "idle", "up"), use(1, 1, "idle", "up")],
+  table: [use(-1, 0, "idle", "right"), use(1, 0, "idle", "left")],
+};
+
 const bottomCentre = (rows: readonly string[]): Point => ({ x: rows[0]!.length / 2, y: rows.length });
 
 function info(rows: readonly string[], tilesWide: number, frames = 1): PropInfo {
@@ -283,6 +451,13 @@ export const PROPS: Readonly<Record<PropId, PropInfo>> = {
   sofa: info(SOFA_ROWS, 2),
   water: info(WATER_ROWS, 1),
   envelope: info(ENVELOPE_ROWS, 1),
+  fridge: info(FRIDGE_ROWS, 1),
+  counter: info(COUNTER_ROWS, 2),
+  table: info(TABLE_ROWS, 1),
+  bookshelf: info(BOOKSHELF_ROWS, 2),
+  lowTable: info(LOW_TABLE_ROWS, 1),
+  beanbag: info(BEANBAG_ROWS, 1),
+  rug: info(RUG_ROWS, 2),
 };
 
 const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk">, readonly string[]>> = {
@@ -292,12 +467,21 @@ const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk">, readonly string[]>> 
   sofa: SOFA_ROWS,
   water: WATER_ROWS,
   envelope: ENVELOPE_ROWS,
+  fridge: FRIDGE_ROWS,
+  counter: COUNTER_ROWS,
+  table: TABLE_ROWS,
+  bookshelf: BOOKSHELF_ROWS,
+  lowTable: LOW_TABLE_ROWS,
+  beanbag: BEANBAG_ROWS,
+  rug: RUG_ROWS,
 };
 const TILE_ROWS: Readonly<Record<TileId, readonly string[]>> = {
   floor: FLOOR_ROWS,
   floorAlt: FLOOR_ALT_ROWS,
   wall: WALL_ROWS,
   wallCap: WALL_CAP_ROWS,
+  carpet: CARPET_ROWS,
+  kitchen: KITCHEN_ROWS,
 };
 
 function drawDesk(screen: ScreenState, frame: number) {

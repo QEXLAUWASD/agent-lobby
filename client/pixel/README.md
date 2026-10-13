@@ -35,7 +35,14 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | sofa | 32 × 20 | bottom centre | 1 |
 | envelope | 12 × 9 | bottom centre | 1 |
 | emote | 12 × 12 | 6, 12 (tip of the tail) | zzz 2, thinking 4, others 1 |
-| floor, floorAlt, wall, wallCap | 16 × 16 | 0, 0 | 1 |
+| fridge | 16 × 27 | bottom centre | 1 |
+| counter (with sink) | 32 × 13 | bottom centre | 1 |
+| table (standing) | 16 × 16 | bottom centre | 1 |
+| bookshelf | 32 × 28 | bottom centre | 1 |
+| lowTable | 16 × 7 | bottom centre | 1 |
+| beanbag | 16 × 12 | bottom centre | 1 |
+| rug (flat, drawn right after the floor) | 32 × 16 | bottom centre | 1 |
+| floor, floorAlt, wall, wallCap, carpet, kitchen | 16 × 16 | 0, 0 | 1 |
 | bubble | text width + chrome (9 to `maxWidth`, default 120) × 15 | `tailX`, 15 (tip of the tail) | 1 |
 
 Put a character's anchor on the bottom centre of the tile it stands or sits on. A seated character
@@ -46,6 +53,27 @@ ignores facing.
 Roles differ in outline, not only colour: the overseer has a brimmed hat and a cape, the nexus a
 headset with an antenna, a meow cat ears and a tail, a plain agent none of these. `lookFor(agentId)`
 picks skin, hair, hair style, shirt and trousers, the same every time for the same id.
+
+## Zones and use points
+
+The pantry is fridge, counter, coffee and water against a wall on `kitchen` tiles, with a standing
+`table` out on the floor. The lounge is bookshelf and plant against a wall on `carpet` tiles, with
+sofa, rug, low table and beanbag. `coffee` and `counter` share a cabinet height and join into one run.
+
+`PROP_USES` says where a character goes to use each prop: `dx`, `dy` in tiles from the prop's
+leftmost tile (`dy` 1 is the tile in front), the pose and facing, and `lift`, the art pixels to
+raise a sitter so it rests on the seat. A sitter shares the prop's tile and is drawn after it.
+
+| Prop | Use points |
+| --- | --- |
+| sofa | both tiles: sit, facing down, lift 4 |
+| beanbag | its tile: sit, facing down, lift 3 |
+| coffee, water, fridge | the tile in front: stand, facing up |
+| counter, bookshelf | the two tiles in front: stand, facing up |
+| table | the tile either side: stand, facing the table |
+| plant, lowTable, rug | none; scenery |
+
+`character({ carry: "cup" })` puts a cup in the hand in any pose seen from the front or side.
 
 ## Speech bubbles and the font
 
@@ -82,7 +110,7 @@ Every cache is bounded. Drawings and images dropped from one are made again on t
 | room composites | 32 most recently used, and 8 million pixels in total |
 | bubbles | 256 most recently used |
 | data URIs | 1024 most recently used, and 6 million characters in total |
-| props, tiles, emotes | the fixed set of drawings: 24 |
+| props, tiles, emotes | the fixed set of drawings: 33 |
 | palettes | one per theme object, held weakly |
 
 Use `composite` to flatten a room's floor, walls and furniture into one bitmap, so the backdrop

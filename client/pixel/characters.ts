@@ -25,6 +25,8 @@ export interface CharacterSpec {
   readonly look: CharacterLook;
   readonly pose?: CharacterPose;
   readonly facing?: Facing;
+  /** Something in the hand. Shown from the front and the sides, not from behind. */
+  readonly carry?: "cup" | null;
   /** Any integer; wraps at the pose's frame count. Frame 0 is the still to show under reduced motion. */
   readonly frame?: number;
 }
@@ -157,6 +159,9 @@ const LEGS_STEP = [
   "...ooooo........",
 ];
 const LEGS_SEATED = ["...oppppppppo...", "...opppoopppo...", "...obbboobbbo...", "...oooooooooo..."];
+
+const CUP = ["oooo", "occo", "owwo", "oooo"];
+const CUP_LEFT = 11;
 
 const TORSO_TOP = 13;
 const SEATED_DROP = 2;
@@ -314,6 +319,7 @@ function compose(spec: Required<CharacterSpec>): Canvas {
   blit(body, paint(torso, legend), 0, TORSO_TOP + drop);
   blit(out, flip ? mirror(body) : body);
   if (back) drawBackItem();
+  if (spec.carry === "cup" && !back) blit(out, paint(CUP, PROP_LEGEND), CUP_LEFT, TORSO_TOP + 1 + drop);
   if (seated && back) blit(out, paint(CHAIR_ROWS, PROP_LEGEND), 0, CHARACTER_HEIGHT - CHAIR_ROWS.length);
   blit(out, headCanvas(facing, look, role, legend), 0, headDrop);
   return out;
@@ -328,9 +334,10 @@ export function character(spec: CharacterSpec): Bitmap {
   const pose = spec.pose ?? "idle";
   const frames = CHARACTER_FRAMES[pose];
   const frame = (((spec.frame ?? 0) % frames) + frames) % frames;
-  const full = { role: spec.role, look: spec.look, pose, facing: spec.facing ?? "down", frame };
+  const carry = spec.carry ?? null;
+  const full = { role: spec.role, look: spec.look, pose, facing: spec.facing ?? "down", frame, carry };
   const { skin, hair, hairStyle, shirt, pants } = spec.look;
-  const key = `c:${full.role}:${pose}:${full.facing}:${frame}:${skin}.${hair}.${hairStyle}.${shirt}.${pants}`;
+  const key = `c:${full.role}:${pose}:${full.facing}:${frame}:${skin}.${hair}.${hairStyle}.${shirt}.${pants}:${carry ?? ""}`;
   let bitmap = cache.get(key);
   if (!bitmap) {
     const drawn = compose(full);
