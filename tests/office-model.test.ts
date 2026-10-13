@@ -218,8 +218,14 @@ describe("layoutOffice", () => {
           expect(across <= 1 || down <= 1).toBe(true);
         }
       }
-      // The building is the box around them all.
-      expect(layout.building).toEqual({ x: 0, y: 0, width: Math.max(...layout.rooms.map((room) => room.x + room.width)), height: layout.height });
+      // The building follows the rooms: each column goes down as far as its lowest room and no further.
+      const depth = layout.building?.depth ?? [];
+      expect(depth).toHaveLength(Math.max(...layout.rooms.map((room) => room.x + room.width)));
+      depth.forEach((bottom, column) => {
+        const over = layout.rooms.filter((room) => room.x <= column && column < room.x + room.width);
+        expect(bottom).toBe(Math.max(...over.map((room) => room.y + room.height)));
+      });
+      expect(Math.max(...depth)).toBe(layout.height);
     }
     expect(layoutOffice([], { width: 40 }).building).toBeNull();
   });

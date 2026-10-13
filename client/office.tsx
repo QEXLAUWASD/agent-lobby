@@ -950,7 +950,7 @@ export function OfficeScene({
             over, on a device pixel so that nothing in it softens. */}
         <View style={{ width, height, marginLeft: snapToDevice(Math.max(0, (available - width) / 2)) }}>
           {office.building && office.rooms.length > 1 ? (
-            <BuildingBackdrop theme={theme} tile={tile} width={office.building.width} height={office.building.height} />
+            <BuildingBackdrop theme={theme} tile={tile} depth={office.building.depth} />
           ) : null}
           {office.rooms.map((room) => (
             <RoomBackdrop key={room.workspaceId} theme={theme} tile={tile} room={room} />

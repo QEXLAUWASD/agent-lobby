@@ -346,26 +346,41 @@ function roomBitmap(room: Room, key: string): Bitmap {
 }
 
 /**
- * The building the rooms stand in: an outer wall and hallway floor, as one
- * image, drawn under the rooms. Where no room is, there is hallway, not a hole.
+ * The building the rooms stand in, as one image drawn under them: hallway
+ * floor wherever it reaches, and an outer wall along its stepped outline.
+ * `depth[x]` is how far down column x goes.
  */
 export const BuildingBackdrop = memo(function BuildingBackdrop({
   theme,
   tile,
-  width,
-  height,
-}: SpriteProps & { width: number; height: number }) {
+  depth,
+}: SpriteProps & { depth: readonly number[] }) {
+  const key = depth.join(".");
   const bitmap = useMemo(() => {
+    const inside = (x: number, y: number) => x >= 0 && x < depth.length && y >= 0 && y < (depth[x] as number);
+    // The outline: every tile of the building that touches the outside, corners included.
     const isWall = (x: number, y: number) =>
-      x >= 0 && y >= 0 && x < width && y < height && (x === 0 || y === 0 || x === width - 1 || y === height - 1);
+      inside(x, y) &&
+      !(
+        inside(x - 1, y) &&
+        inside(x + 1, y) &&
+        inside(x, y - 1) &&
+        inside(x, y + 1) &&
+        inside(x - 1, y - 1) &&
+        inside(x + 1, y - 1) &&
+        inside(x - 1, y + 1) &&
+        inside(x + 1, y + 1)
+      );
+    const height = Math.max(0, ...depth);
     const layers: Layer[] = [];
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
+    for (let x = 0; x < depth.length; x += 1) {
+      for (let y = 0; y < (depth[x] as number); y += 1) {
         layers.push({ bitmap: isWall(x, y) ? wallTopAt(isWall, x, y) : tileBitmap("floorAlt"), x: x * ART_TILE, y: y * ART_TILE });
       }
     }
-    return composite(`building:${width}x${height}`, width * ART_TILE, height * ART_TILE, layers);
-  }, [width, height]);
+    return composite(`building:${key}`, depth.length * ART_TILE, height * ART_TILE, layers);
+    // `depth` is read through `key`.
+  }, [key]);
   return (
     <Sprite sprite={bitmap} palette={officePalette(theme)} scale={artScale(tile)} style={{ position: "absolute", left: 0, top: 0 }} />
   );

@@ -180,10 +180,12 @@ export interface Office {
   /** agentId → where it stands. Visitors never take a desk, so they move nobody. */
   visitors: ReadonlyMap<string, Visitor>;
   /**
-   * The building: the rectangle around all the rooms. What is inside it and
-   * in no room is hallway, not a hole.
+   * The building the rooms stand in: for each column of tiles, how far down it
+   * goes, which is where the lowest room over that column ends. Its outline is
+   * stepped, following the rooms; what is inside it and in no room is hallway,
+   * a gap enclosed between rooms, never floor below the last room of a column.
    */
-  building: Rect | null;
+  building: { depth: number[] } | null;
   /**
    * The width the caller offered was narrower than `MIN_ROOM_WIDTH`; the office
    * is laid out at the minimum and a view has to scroll or scale.
@@ -686,13 +688,16 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
   const skyline = Array.from({ length: width }, () => 0);
   for (const group of ordered) {
     const size = layoutRoom(group, { x: 0, y: 0 }, width, holding);
-    let at = { x: 0, y: Infinity };
+    // The highest place it fits; among those, the one that leaves least hallway under it; then the leftmost.
+    let at = { x: 0, y: Infinity, gap: Infinity };
     for (let x = 0; x + size.width <= width; x += 1) {
       let y = 0;
       for (let column = x; column < x + size.width; column += 1) y = Math.max(y, skyline[column] as number);
-      if (y < at.y) at = { x, y };
+      let gap = 0;
+      for (let column = x; column < x + size.width; column += 1) gap += y - (skyline[column] as number);
+      if (y < at.y || (y === at.y && gap < at.gap)) at = { x, y, gap };
     }
-    if (!Number.isFinite(at.y)) at = { x: 0, y: Math.max(...skyline) };
+    if (!Number.isFinite(at.y)) at = { x: 0, y: Math.max(...skyline), gap: 0 };
     const room = layoutRoom(group, at, width, holding);
     // The right wall stays open to a neighbour: only the columns left of it are spoken for.
     for (let column = room.x; column < room.x + room.width - WALL && column < width; column += 1) {
@@ -740,7 +745,13 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
   });
   const height = rooms.reduce((bottom, room) => Math.max(bottom, room.y + room.height), 0);
   const right = rooms.reduce((edge, room) => Math.max(edge, room.x + room.width), 0);
-  const building = rooms.length > 0 ? { x: 0, y: 0, width: right, height } : null;
+  const depth = Array.from({ length: right }, () => 0);
+  for (const room of rooms) {
+    for (let column = room.x; column < room.x + room.width; column += 1) {
+      depth[column] = Math.max(depth[column] as number, room.y + room.height);
+    }
+  }
+  const building = rooms.length > 0 ? { depth } : null;
   return { width, height, rooms, desks, roomOf, visitors, building, cramped };
 }
 
