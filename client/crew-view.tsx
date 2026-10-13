@@ -38,6 +38,7 @@ import {
   type Presence,
 } from "./office-model";
 import { highlighted as highlightedBy, indexNodes, sceneScale } from "./scene-model";
+import { StateIcon } from "./sprites";
 import {
   Chip,
   Empty,
@@ -381,7 +382,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
             >
               <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.md }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                  <StatusDot theme={theme} state={selectedNode.state} />
+                  <StateIcon theme={theme} state={selectedNode.state} still={reducedMotion} />
                   <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                     <Text numberOfLines={2} style={{ color: colors.foreground, fontSize: font.base, fontWeight: "600" }}>
                       {displayTitle(selectedNode.agent)}

@@ -15,7 +15,8 @@ import {
   summary,
   type CrewNode,
 } from "./model";
-import { Empty, IconButton, Muted, StatusDot, font, pressStyle, radius, space, stateColor } from "./ui";
+import { StateIcon } from "./sprites";
+import { Empty, IconButton, Muted, font, pressStyle, radius, space, stateColor, useReducedMotion } from "./ui";
 
 type Row =
   | { kind: "group"; key: string; name: string; text: string }
@@ -81,6 +82,7 @@ export function CrewList({
     });
   }, []);
 
+  const reduced = useReducedMotion();
   const renderRow = useCallback(
     ({ item }: { item: Row }) => {
       if (item.kind === "group") {
@@ -140,7 +142,8 @@ export function CrewList({
                 }}
               />
             ) : null}
-            <StatusDot theme={theme} state={node.state} />
+            {/* A shape of its own for each state, moving where the state goes on; the word for it is on the right. */}
+            <StateIcon theme={theme} state={node.state} still={reduced} />
             <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
               <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.base }}>
                 {displayTitle(agent)}
@@ -177,7 +180,7 @@ export function CrewList({
         </View>
       );
     },
-    [colors, theme, compact, selected, collapsed, now, toggleCollapsed, onSelect, renderDetail],
+    [colors, theme, compact, selected, collapsed, now, reduced, toggleCollapsed, onSelect, renderDetail],
   );
 
   return (
@@ -185,7 +188,7 @@ export function CrewList({
       data={rows}
       keyExtractor={(row: Row) => row.key}
       renderItem={renderRow}
-      extraData={[selected, collapsed, now, extraData]}
+      extraData={[selected, collapsed, now, reduced, extraData]}
       contentContainerStyle={[{ paddingVertical: space.sm, paddingBottom: space.xl }, contentStyle]}
       ListEmptyComponent={emptyLabel ? <Empty theme={theme} label={emptyLabel} /> : null}
       style={{ flex: 1 }}
