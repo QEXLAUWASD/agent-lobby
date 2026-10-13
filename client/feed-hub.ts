@@ -2,7 +2,7 @@ import { FEED_CAP } from "./feed-plan";
 
 /**
  * One registry of live timeline subscriptions for the whole plugin. Every
- * mounted Crew view (a panel per workspace tab, the global surface) takes its
+ * mounted Lobby view (a panel per workspace tab, the global surface) takes its
  * subscriptions from here, so `cap` bounds what the daemon carries however many
  * views are open, and two views watching the same agent share one subscription.
  *

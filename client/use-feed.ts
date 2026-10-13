@@ -58,7 +58,7 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
 
   useEffect(() => {
     let alive = true;
-    // Every mounted Crew view on this connection draws on the same budget.
+    // Every mounted Lobby view on this connection draws on the same budget.
     const hub = hubFor<PaseoAgentTimelineEvent>(paseo, () => ({
       subscribe(agentId, handler) {
         const stop = paseo.agents.ref(agentId).timeline.subscribe(handler);

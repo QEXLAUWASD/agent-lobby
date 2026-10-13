@@ -4,7 +4,7 @@ import { fetchWorkspaces } from "./use-directory";
 const RESYNC_DEBOUNCE_MS = 500;
 
 /**
- * Puts a Crew button on every workspace header. Pressing it opens Crew as an Explorer tab,
+ * Puts a Lobby button on every workspace header. Pressing it opens Lobby as an Explorer tab,
  * next to Files and Changes; the tab then persists with that workspace's layout. Header buttons
  * are registered per workspace, so the set follows the workspace list.
  */
@@ -26,15 +26,15 @@ export function addCrewHeaderButtons(client: PluginClientContext): () => void {
       buttons.set(
         workspaceId,
         client.addHeaderButton({
-          id: "crew",
+          id: "lobby",
           workspaceId,
           button: {
-            title: "Show Crew in Explorer",
+            title: "Show Lobby in Explorer",
             icon: "Users",
             behavior: {
               kind: "action",
               onPress() {
-                client.openPanel("crew", { workspaceId, location: "explorer" });
+                client.openPanel("lobby", { workspaceId, location: "explorer" });
               },
             },
           },

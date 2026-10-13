@@ -5,30 +5,30 @@ import { CrewPanel, CrewSurface } from "./client/main";
 export default function contribute(client: PluginClientContext) {
   const disposers = [
     client.addWorkspacePanel({
-      id: "crew",
-      title: "Crew",
+      id: "lobby",
+      title: "Lobby",
       icon: "Users",
       context: "workspace",
       locations: ["explorer", "workspace"],
       Component: CrewPanel,
     }),
-    client.addSurface("crew", CrewSurface),
+    client.addSurface("lobby", CrewSurface),
     addCrewHeaderButtons(client),
     client.addCommandCenterItem({
-      id: "open-crew",
-      title: "Open Crew",
+      id: "open-lobby",
+      title: "Open Lobby",
       icon: "Users",
-      keywords: ["agents", "crew", "subagents", "orchestration", "room"],
+      keywords: ["agents", "lobby", "crew", "subagents", "office", "room"],
       context: "workspace",
-      onSelect: (context) => context.openPanel("crew", { location: "explorer" }),
+      onSelect: (context) => context.openPanel("lobby", { location: "explorer" }),
     }),
     client.addCommandCenterItem({
-      id: "open-crew-all",
-      title: "Open Crew across workspaces",
+      id: "open-lobby-all",
+      title: "Open Lobby across workspaces",
       icon: "Users",
-      keywords: ["agents", "crew", "rooms"],
+      keywords: ["agents", "lobby", "crew", "office", "rooms"],
       context: "global",
-      onSelect: (context) => context.openSurface("crew"),
+      onSelect: (context) => context.openSurface("lobby"),
     }),
   ];
   return () => {

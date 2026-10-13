@@ -1,5 +1,5 @@
 {
-  "id": "crew",
+  "id": "lobby",
   "requirements": {
     "paseo": ">=0.11.2"
   }

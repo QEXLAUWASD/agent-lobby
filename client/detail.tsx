@@ -50,7 +50,7 @@ export function useAgentActions(paseo: PaseoApi): AgentActions {
       run(allow ? "Allowed" : "Denied", () =>
         paseo.agents.ref(agent.id).respondToPermission({
           requestId,
-          response: allow ? { behavior: "allow" } : { behavior: "deny", message: "Denied from Crew" },
+          response: allow ? { behavior: "allow" } : { behavior: "deny", message: "Denied from Lobby" },
         }),
       ),
     [paseo, run],

@@ -1,9 +1,10 @@
 {
-  "name": "paseo-crew",
+  "name": "agent-lobby",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Paseo Explorer pane and sidebar surface showing every agent crew, live.",
+  "description": "A Paseo plugin that shows your agents as a small pixel-art office: who is working, who is waiting for you, who has finished.",
+  "keywords": ["paseo", "paseo-plugin", "agents", "lobby", "crew", "pixel-art"],
   "license": "MIT",
   "engines": {
     "node": ">=24"
