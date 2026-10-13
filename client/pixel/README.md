@@ -30,12 +30,13 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | --- | --- | --- | --- |
 | character | 16 × 24 | 8, 24 (under the feet) | idle 2, walk 4, sit 2, sleep 2, drink 2, talk 2, stretch 2, doze 2 |
 | character, pose `lie` | 24 × 16 | 12, 16 | 2 |
-| desk | 32 × 28 | 16, 28; the monitor is the top 12 rows | lit 2, off 1, error 1 |
+| desk | 32 × 28 | 16, 28; the monitor is the top 12 rows | lit 8, off 1, error 1 |
 | chair | 16 × 16 | 8, 16 | 1 |
 | plant, coffee, water | 16 × 19 to 22 | bottom centre | 1 |
 | sofa | 32 × 20 | bottom centre | 1 |
 | envelope | 12 × 9 | bottom centre | 1 |
-| emote | 12 × 12 | 6, 12 (tip of the tail) | zzz 2, thinking 4, others 1 |
+| emote | 12 × 12 | 6, 12 (tip of the tail) | zzz 2, thinking 4, readyBob 2, readySpark 8, readyCup 3, others 1 |
+| icon(state) | 8 × 8 | 0, 0 | see State icons |
 | fridge | 16 × 27 | bottom centre | 1 |
 | counter (with sink) | 32 × 13 | bottom centre | 1 |
 | table (standing) | 16 × 16 | bottom centre | 1 |
@@ -128,6 +129,41 @@ Poses for agents with nothing to do. Frame 0 is the still; frame 1 is the action
 
 Left is always the mirror of right.
 
+## Animation strips
+
+`Animation` is a loop as one bitmap: `strip` holds every frame side by side, `still` is frame 0,
+and `frames`, `frameWidth`, `frameHeight`, `frameMs` and `anchor` say how to play it. A platform
+animation can slide the strip one frame at a time (a stepped translate inside a clipping view) with
+no script per frame. With `frames` 1, or under reduced motion, draw `still`.
+
+| Call | What | Frames |
+| --- | --- | --- |
+| `stateIcon(state)` | the list icon, 8 × 8 | needs-input 4, working 4, ready 6, idle 3, failed 1, closed 1 |
+| `deskAnimation(screen)` | the desk and its monitor | lit 8 (code scrolling a row at a time, a blinking cursor), off 1, error 1 |
+| `emoteAnimation(id)` | any emote | zzz 2, thinking 4, readyBob 2, readySpark 8, readyCup 3, others 1 |
+| `characterAnimation(spec)` | a pose | walk 4, others 2 |
+| `animation(key, frames, frameMs)` | your own equal-sized frames | as given |
+
+Animations are cached, 256 most recently used. `icon(state, frame)` gives one frame of a list icon.
+
+## State icons
+
+8 × 8, for a list row: crisp at 16 layout pixels on 1×, 2× and 3× screens and 14.4 on 1.67×. One
+theme colour plus its ink, no outline, so they hold on any surface.
+
+| State | Shape | Motion |
+| --- | --- | --- |
+| needs-input | a badge with "!" | hops two pixels; never blinks |
+| failed | a heavy cross | none |
+| working | a monitor | lines of code scroll |
+| ready | a check | a twinkle beside it now and then |
+| idle | "Zz" | one Z drifts off at a time |
+| closed | a filing cabinet | none |
+
+Three candidates for Ready above a head, all in the ready colour: `readyBob` (the check bubble
+settles a pixel and rises, slowly), `readySpark` (a glint runs along the check, then rests) and
+`readyCup` (a steaming cup, for the pantry; it has no check).
+
 ## Closed agents
 
 `prop("archive", { level })` is a three-drawer filing cabinet standing for the agents who have left
@@ -182,6 +218,7 @@ Every cache is bounded. Drawings and images dropped from one are made again on t
 | character bitmaps | 1024 most recently used (about 0.4 MB) |
 | room composites | 32 most recently used, and 8 million pixels in total |
 | bubbles | 256 most recently used |
+| animations | 256 most recently used |
 | data URIs | 1024 most recently used, and 6 million characters in total |
 | props, tiles, emotes | the fixed set of drawings: about 70, counting the 16 wall tops |
 | palettes | one per theme object, held weakly |

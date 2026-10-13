@@ -122,29 +122,29 @@ const MONITOR_FRAME = [
 const MONITOR_LEFT = 9;
 const MONITOR_TOP = 2;
 /** 12 x 8, drawn inside the monitor frame. `k` is the screen, `K` what it shows. */
+// A working screen: four lines of code scrolling up a row at a time, with a cursor that blinks at
+// the end of the newest line. Each line is [indent, length].
+const CODE_LINES: readonly (readonly [number, number])[] = [
+  [1, 5],
+  [2, 7],
+  [2, 4],
+  [1, 8],
+];
+const LIT_FRAMES = 2 * CODE_LINES.length;
+function litScreen(frame: number): string[] {
+  const rows: string[] = [];
+  for (let y = 0; y < 8; y++) {
+    const line = (y + frame) % 2 === 1 ? CODE_LINES[Math.floor((y + frame) / 2) % CODE_LINES.length]! : null;
+    let text = line ? row(["k", line[0]], ["K", line[1]]) : "";
+    // The cursor follows the lowest line on screen, two frames on and two off.
+    if (line && y >= 6 && frame % 4 < 2) text += "kc";
+    rows.push(text.padEnd(12, "k"));
+  }
+  return rows;
+}
+
 const SCREENS: Readonly<Record<ScreenState, readonly (readonly string[])[]>> = {
-  lit: [
-    [
-      "kkkkkkkkkkkk",
-      "kKKKKkkkkkkk",
-      "kkkkkkkkkkkk",
-      "kkKKKKKKkkkk",
-      "kkKKKKkkkkkk",
-      "kkkkkkkkkkkk",
-      "kKKKKKKkkkkk",
-      "kkkkkkkkkkkk",
-    ],
-    [
-      "kkkkkkkkkkkk",
-      "kkKKKKKKkkkk",
-      "kkKKKKkkkkkk",
-      "kkkkkkkkkkkk",
-      "kKKKKKKkkkkk",
-      "kkkkkkkkkkkk",
-      "kKKKkkkkkkkk",
-      "kkkkkkkkkkkk",
-    ],
-  ],
+  lit: Array.from({ length: LIT_FRAMES }, (_, frame) => litScreen(frame)),
   off: [
     [
       "kkkkkkkkkkkk",
@@ -171,7 +171,7 @@ const SCREENS: Readonly<Record<ScreenState, readonly (readonly string[])[]>> = {
   ],
 };
 const SCREEN_LEGEND: Readonly<Record<ScreenState, Legend>> = {
-  lit: { k: "screenLit", K: "screenGlow" },
+  lit: { k: "screenLit", K: "screenGlow", c: "white" },
   off: { k: "screenOff", K: "metalShade" },
   error: { k: "screenError", K: "screenErrorInk" },
 };
@@ -713,10 +713,17 @@ function cached(key: string, anchor: Point, draw: () => { width: number; height:
   return bitmap;
 }
 
+/** How many frames a desk has with its screen in each state. */
+export const SCREEN_FRAMES: Readonly<Record<ScreenState, number>> = {
+  lit: SCREENS.lit.length,
+  off: SCREENS.off.length,
+  error: SCREENS.error.length,
+};
+
 export interface PropOptions {
   /** Desk only: what the monitor shows. Defaults to `off`. */
   readonly screen?: ScreenState;
-  /** Desk only: a lit screen has two frames. Wraps. */
+  /** Desk only: a lit screen scrolls through eight frames. Wraps. */
   readonly frame?: number;
   /** Archive only: how full it is, 0 to 4. See `archiveLevel`. */
   readonly level?: number;

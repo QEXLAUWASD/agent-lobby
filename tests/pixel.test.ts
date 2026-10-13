@@ -21,7 +21,9 @@ import {
   type BubbleTone,
 } from "../client/pixel/bubble";
 import { contrast, luminance, mix, parseColor } from "../client/pixel/color";
+import { ANIMATION_MAX_CACHED, animation, characterAnimation, deskAnimation, emoteAnimation, stateIcon } from "../client/pixel/anim";
 import { EMOTE_FRAMES, EMOTE_SIZE, emote, type EmoteId } from "../client/pixel/emotes";
+import { ICON_FRAMES, ICON_SIZE, icon, type IconState } from "../client/pixel/icons";
 import { ELLIPSIS, FACES, FALLBACK, FONT_HEIGHT, GLYPH_CHARS, ICON, glyph } from "../client/pixel/font";
 import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "../client/pixel/grid";
 import { Lru } from "../client/pixel/lru";
@@ -66,7 +68,8 @@ const DARK: PluginTheme = {
 const ROLES: CharacterRole[] = ["overseer", "nexus", "meow", "agent"];
 const POSES: CharacterPose[] = ["idle", "walk", "sit", "sleep", "drink", "talk", "stretch", "doze", "lie"];
 const FACINGS: Facing[] = ["down", "up", "left", "right"];
-const EMOTES: EmoteId[] = ["alert", "question", "fail", "check", "zzz", "thinking"];
+const EMOTES: EmoteId[] = ["alert", "question", "fail", "check", "zzz", "thinking", "readyCup"];
+const READY_EMOTES: EmoteId[] = ["readyBob", "readySpark", "readyCup"];
 const PROP_IDS: PropId[] = [
   "desk",
   "chair",
@@ -406,6 +409,11 @@ describe("props, tiles and emotes", () => {
     expect(difference(marks[1]!, marks[2]!)).toBeGreaterThan(8);
     expect(prop("desk", { screen: "lit", frame: 0 }).pixels).not.toEqual(prop("desk", { screen: "lit", frame: 1 }).pixels);
     expect(prop("desk", { screen: "off", frame: 3 })).toBe(prop("desk"));
+    // A working screen is an eight-frame loop in which every frame differs from the one before.
+    const lit = Array.from({ length: 8 }, (_, frame) => prop("desk", { screen: "lit", frame }));
+    lit.forEach((frame, index) => expect(frame.pixels, `frame ${index}`).not.toEqual(lit[(index + 7) % 8]!.pixels));
+    expect(prop("desk", { screen: "lit", frame: 8 })).toBe(lit[0]);
+    expect(new Set(lit.map((frame) => frame.pixels.join())).size).toBe(8);
   });
 
   it("fills the archive by level, in shape", () => {
@@ -913,5 +921,127 @@ describe("scale", () => {
     expect(snap(10.3, 2)).toBe(10.5);
     expect(snap(10.3, 1)).toBe(10);
     expect(snap(7.2, 5 / 3) * (5 / 3)).toBeCloseTo(12);
+  });
+});
+
+describe("ready emotes", () => {
+  it("keeps the check, or the ready colour, and moves", () => {
+    const ink = (bitmap: Bitmap) => Array.from(bitmap.pixels, (value) => (value === slotIndex("emoteReadyInk") ? 1 : 0));
+    const check = ink(emote("check"));
+    // Bob and spark open on the plain check; the glint only ever covers one pixel of it.
+    expect(emote("readyBob").pixels).toEqual(emote("check").pixels);
+    expect(emote("readySpark").pixels).toEqual(emote("check").pixels);
+    for (let frame = 0; frame < EMOTE_FRAMES.readySpark; frame++) {
+      expect(difference(check, ink(emote("readySpark", frame)))).toBeLessThanOrEqual(1);
+    }
+    for (const id of READY_EMOTES) {
+      expect(EMOTE_FRAMES[id]).toBeGreaterThan(1);
+      const frames = Array.from({ length: EMOTE_FRAMES[id] }, (_, frame) => emote(id, frame));
+      expect(new Set(frames.map((frame) => frame.pixels.join())).size).toBeGreaterThan(1);
+      for (const frame of frames) {
+        expect([frame.width, frame.height]).toEqual([EMOTE_SIZE, EMOTE_SIZE]);
+        expect([...frame.pixels]).toContain(slotIndex("emoteReady"));
+      }
+    }
+    // Settled, the bubble still ends in a tail at the anchor.
+    const settled = emote("readyBob", 1);
+    expect(settled.pixels[11 * 12 + 5]).toBe(slotIndex("outline"));
+    expect(opaque(settled).slice(0, 12).some(Boolean)).toBe(false);
+  });
+});
+
+describe("state icons", () => {
+  const STATES: IconState[] = ["needs-input", "failed", "working", "ready", "idle", "closed"];
+
+  it("draws one 8 x 8 icon per state, each its own shape", () => {
+    const shapes = STATES.map((state) => {
+      const still = icon(state);
+      expect([still.width, still.height]).toEqual([ICON_SIZE, ICON_SIZE]);
+      expect(opaque(still).filter(Boolean).length, state).toBeGreaterThanOrEqual(8);
+      return opaque(still);
+    });
+    for (let a = 0; a < shapes.length; a++) {
+      for (let b = a + 1; b < shapes.length; b++) {
+        expect(difference(shapes[a]!, shapes[b]!), `${STATES[a]} vs ${STATES[b]}`).toBeGreaterThanOrEqual(12);
+      }
+    }
+  });
+
+  it("moves the icons that should move and keeps the rest still", () => {
+    expect(ICON_FRAMES).toMatchObject({ failed: 1, closed: 1 });
+    for (const state of ["needs-input", "working", "ready", "idle"] as const) {
+      const frames = Array.from({ length: ICON_FRAMES[state] }, (_, frame) => icon(state, frame));
+      expect(new Set(frames.map((frame) => frame.pixels.join())).size, state).toBeGreaterThan(1);
+    }
+    // Needs input hops rather than blinks: the badge is whole in every frame.
+    const drawn = Array.from({ length: ICON_FRAMES["needs-input"] }, (_, frame) => opaque(icon("needs-input", frame)).filter(Boolean).length);
+    expect(new Set(drawn).size).toBe(1);
+    // Ready never loses its check, and working never loses its monitor frame.
+    const check = opaque(icon("ready"));
+    for (let frame = 0; frame < ICON_FRAMES.ready; frame++) {
+      expect(opaque(icon("ready", frame)).every((value, index) => value >= check[index]!)).toBe(true);
+    }
+    expect(icon("working", 1).pixels.slice(0, 8)).toEqual(icon("working", 0).pixels.slice(0, 8));
+  });
+
+  it("takes its colours from the theme's status colours", () => {
+    for (const [state, slot] of [
+      ["needs-input", "emoteAlert"],
+      ["failed", "emoteFail"],
+      ["working", "emoteThinking"],
+      ["ready", "emoteReady"],
+      ["idle", "emoteIdle"],
+    ] as const) {
+      expect([...icon(state).pixels], state).toContain(slotIndex(slot));
+    }
+  });
+});
+
+describe("animation strips", () => {
+  it("lays the frames side by side, the still first", () => {
+    const desk = deskAnimation("lit");
+    expect([desk.frames, desk.frameWidth, desk.frameHeight]).toEqual([8, 32, 28]);
+    expect([desk.strip.width, desk.strip.height]).toEqual([8 * 32, 28]);
+    expect(desk.still).toBe(prop("desk", { screen: "lit", frame: 0 }));
+    expect(desk.anchor).toEqual(desk.still.anchor);
+    for (let frame = 0; frame < desk.frames; frame++) {
+      const expected = prop("desk", { screen: "lit", frame });
+      for (let y = 0; y < 28; y++) {
+        const from = y * desk.strip.width + frame * 32;
+        expect([...desk.strip.pixels.slice(from, from + 32)]).toEqual([...expected.pixels.slice(y * 32, (y + 1) * 32)]);
+      }
+    }
+  });
+
+  it("gives a still thing one frame and no strip of its own", () => {
+    for (const still of [deskAnimation("off"), deskAnimation("error"), stateIcon("failed"), emoteAnimation("check")]) {
+      expect(still.frames).toBe(1);
+      expect(still.strip).toBe(still.still);
+    }
+  });
+
+  it("covers icons, emotes and poses with sensible timings", () => {
+    expect(stateIcon("working")).toMatchObject({ frames: 4, frameWidth: 8, frameHeight: 8 });
+    expect(stateIcon("working").strip.width).toBe(32);
+    expect(emoteAnimation("readySpark")).toMatchObject({ frames: 8, frameWidth: 12 });
+    const walk = characterAnimation({ role: "meow", look: LOOK, pose: "walk", facing: "left" });
+    expect([walk.frames, walk.strip.width, walk.strip.height]).toEqual([4, 64, 24]);
+    expect(walk.still).toBe(character({ role: "meow", look: LOOK, pose: "walk", facing: "left", frame: 0 }));
+    const lying = characterAnimation({ role: "meow", look: LOOK, pose: "lie" });
+    expect([lying.frameWidth, lying.frameHeight, lying.anchor]).toEqual([24, 16, { x: 12, y: 16 }]);
+    for (const one of [stateIcon("needs-input"), stateIcon("idle"), deskAnimation("lit"), emoteAnimation("readyBob"), walk]) {
+      expect(one.frameMs).toBeGreaterThanOrEqual(100);
+      expect(one.frames * one.frameMs).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  it("returns the same animation for the same thing, within a bound", () => {
+    expect(stateIcon("ready")).toBe(stateIcon("ready"));
+    expect(characterAnimation({ role: "agent", look: LOOK })).toBe(characterAnimation({ role: "agent", look: { ...LOOK }, pose: "idle" }));
+    const first = animation("bound-0", [tile("floor")], 100);
+    for (let index = 1; index <= ANIMATION_MAX_CACHED; index++) animation(`bound-${index}`, [tile("floor")], 100);
+    expect(animation("bound-0", [tile("floor")], 100)).not.toBe(first);
+    expect(() => animation("empty", [], 100)).toThrow();
+    expect(() => animation("ragged", [tile("floor"), prop("plant")], 100)).toThrow(/different size/);
   });
 });

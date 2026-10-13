@@ -10,3 +10,5 @@ export { crispScale, devicePixels, snap } from "./scale";
 export { bubble, bubbleScale, bubbleSize, bubbleWidth, tag, BUBBLE_HEIGHT, BUBBLE_MAX_LINES, BUBBLE_MAX_WIDTH } from "./bubble";
 export type { BubbleSpec, BubbleStatus, BubbleTone } from "./bubble";
 export { fitText, foldText, textWidth, wrapText } from "./text";
+export { animation, characterAnimation, deskAnimation, emoteAnimation, stateIcon, type Animation } from "./anim";
+export { icon, ICON_SIZE, type IconState } from "./icons";
