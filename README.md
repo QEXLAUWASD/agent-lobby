@@ -47,8 +47,11 @@ are applied in place. A 60 s backstop only guards against a missed event. Worksp
 `workspaces.list` and refresh on `workspace_update`.
 
 Speech and messages come from agent timelines. Each timeline subscription costs the daemon one, so
-at most eight are open: the working and waiting agents of the rooms on screen. Everyone else is
-drawn from `agent_update` alone.
+the plugin keeps at most eight open per daemon connection, however many Crew panels and surfaces
+are mounted: views share one registry, and two views watching the same agent share one
+subscription. Each view asks for the working and waiting agents of the rooms it has on screen;
+when the eight are taken, a view goes without and asks again half a minute later. Everyone else is
+drawn from `agent_update` alone. A typed message is never read as a message between agents.
 
 ## Art
 
@@ -63,7 +66,8 @@ npm install
 paseo plugin install "$PWD"
 ```
 
-Built and checked against Paseo 0.11.2; it needs the timeline and list subscriptions of that SDK. There is no build step.
+Requires Paseo 0.11.2 or newer: that is the first release whose daemon hands clients a message
+between agents with its verified sender. There is no build step.
 
 ## Develop
 
@@ -74,6 +78,6 @@ paseo plugin reload crew
 
 The pure, tested modules: `client/model.ts` (state, the crew forest, filters), `client/office-model.ts`
 (rooms, desks, seats, presence), `client/exchanges.ts` (messages and bubbles), `client/feed-plan.ts`
-(which timelines to subscribe to), `client/scene-model.ts` (scale, walks, marker paths) and
+and `client/feed-hub.ts` (which timelines to subscribe to, and the shared budget), `client/scene-model.ts` (scale, walks, marker paths) and
 `client/pixel/` (the art). `client/office.tsx` is the scene and draws only through
 `client/sprites.tsx`; `client/crew-view.tsx` hosts the office, the list, the detail and the dialogs.

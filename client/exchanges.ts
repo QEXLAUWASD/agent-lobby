@@ -72,71 +72,6 @@ export function toolLabel(name: string): string {
   return firstLine(last.includes("_") ? last.replace(/_/g, " ") : last, 24) || "tool";
 }
 
-export interface Envelope {
-  kind: "agent-message" | "agent-notification";
-  event: ExchangeEvent;
-  from: string;
-  fromTitle: string | null;
-  messageId: string;
-  text: string;
-}
-
-function unescapeXml(value: string): string | null {
-  if (/[<>]|&(?!amp;|lt;|gt;|quot;|apos;)/.test(value)) return null;
-  return value.replace(/&(amp|lt|gt|quot|apos);/g, (_, entity: string) => {
-    switch (entity) {
-      case "amp":
-        return "&";
-      case "lt":
-        return "<";
-      case "gt":
-        return ">";
-      case "quot":
-        return '"';
-      default:
-        return "'";
-    }
-  });
-}
-
-const NOTIFICATION_EVENTS: readonly string[] = ["finished", "errored", "permission-required", "closed"];
-
-/**
- * Reads a raw `<paseo-system version="1" …>` envelope, as strictly as the daemon
- * that wrote it: the envelope must be the whole text, attributes may not repeat,
- * and the body must be XML-escaped. A body that merely contains something shaped
- * like an envelope is escaped text and comes back as text; a raw `<` or `>`
- * anywhere inside rejects the whole thing. Human messages (`kind="user-message"`)
- * and anything else that is not agent-to-agent return null.
- */
-export function parseEnvelope(text: string): Envelope | null {
-  const envelope = /^<paseo-system((?:\s+[a-z-]+="[^"<>]*")+)>\n([\s\S]*)\n<\/paseo-system>$/.exec(text);
-  if (!envelope) return null;
-  const attributes = new Map<string, string>();
-  for (const match of (envelope[1] as string).matchAll(/\s+([a-z-]+)="([^"<>]*)"/g)) {
-    const value = unescapeXml(match[2] as string);
-    if (value === null || attributes.has(match[1] as string)) return null;
-    attributes.set(match[1] as string, value);
-  }
-  if (attributes.get("version") !== "1") return null;
-  const messageId = attributes.get("message-id");
-  const from = attributes.get("source-agent-id");
-  const body = unescapeXml(envelope[2] as string);
-  if (!messageId || !from || body === null) return null;
-  const kind = attributes.get("kind");
-  const fromTitle = attributes.get("source-agent-title") || null;
-  if (kind === "agent-message") {
-    if (attributes.has("event")) return null;
-    return { kind, event: "message", from, fromTitle, messageId, text: body };
-  }
-  if (kind === "agent-notification") {
-    const event = attributes.get("event");
-    if (!event || !NOTIFICATION_EVENTS.includes(event)) return null;
-    return { kind, event: event as ExchangeEvent, from, fromTitle, messageId, text: body };
-  }
-  return null;
-}
-
 /** The slice of a timeline item this module reads. Everything is optional: it is wire data. */
 export interface TimelineItemLike {
   type?: unknown;
@@ -151,7 +86,7 @@ export interface TimelineItemLike {
 
 const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
-const EXCHANGE_EVENTS: readonly string[] = ["message", ...NOTIFICATION_EVENTS];
+const EXCHANGE_EVENTS: readonly string[] = ["message", "finished", "errored", "permission-required", "closed"];
 
 /** A notification's body is the daemon's boilerplate ("Agent 7510… finished"); the bubble says what happened. */
 const NOTIFICATION_TEXT: Record<Exclude<ExchangeEvent, "message">, string> = {
@@ -201,28 +136,16 @@ function exchangeFromToolCall(item: TimelineItemLike, context: ItemContext): Fee
   };
 }
 
+/**
+ * A message between agents reaches a client only as the daemon's own
+ * `agent_message` tool call, which carries the sender the daemon verified. A
+ * `user_message` is never read as one, whatever its text looks like: it is what
+ * somebody typed, and an envelope typed by hand names any sender it likes.
+ */
 function eventsFromItem(item: TimelineItemLike | null | undefined, context: ItemContext): FeedEvent[] {
   if (!item) return [];
   const seq = context.seq === undefined ? {} : { seq: context.seq };
   switch (item.type) {
-    case "user_message": {
-      // Daemons that predate the projection deliver the envelope as the message text.
-      const envelope = parseEnvelope(text(item.text) ?? "");
-      if (!envelope) return [];
-      return [
-        {
-          kind: "exchange",
-          id: envelope.messageId,
-          from: envelope.from,
-          fromTitle: envelope.fromTitle,
-          to: context.agentId,
-          event: envelope.event,
-          text: exchangeText(envelope.event, envelope.text),
-          at: context.at,
-          ...seq,
-        },
-      ];
-    }
     case "assistant_message": {
       const body = text(item.text);
       if (!body) return [];

@@ -19,6 +19,7 @@ import {
   BUBBLE_HEIGHT,
   CHARACTER_HEIGHT,
   MARKER_TRAVEL_MS,
+  MIN_TOUCH,
   bubbleBox,
   characterLabel,
   linkBetween,
@@ -44,6 +45,11 @@ import { font, stateColor } from "./ui";
 
 const FRAME_MS = 280;
 const DIMMED = 0.28;
+/**
+ * Characters are stacked by the row they stand on. Messages and speech are not
+ * part of the room: they sit above every character, emote and desk in it.
+ */
+const ABOVE_ROOM = 100_000;
 
 /** One interval for every animated sprite in the scene; it runs only while somebody is listening. */
 const frames = (() => {
@@ -197,7 +203,9 @@ const Character = memo(function Character({
   const frame = useFrame(animated);
   const emoteFrame = useFrame(!reduced && presence.emote !== null && walking === null);
   const height = tile * CHARACTER_HEIGHT;
-  const slop = touchSlop(tile);
+  // The pressable itself is at least 44 px each way: a visitor or a wanderer has no desk cell behind it.
+  const padX = touchSlop(tile);
+  const padTop = Math.max(0, MIN_TOUCH - height);
   return (
     <Animated.View
       style={{
@@ -215,9 +223,16 @@ const Character = memo(function Character({
         accessibilityRole="button"
         accessibilityLabel={characterLabel(agent, presence.state, saying, visiting)}
         accessibilityState={{ selected }}
-        hitSlop={{ left: slop, right: slop, top: slop + (height - tile), bottom: slop }}
         onPress={() => onPress(agent.id)}
-        style={{ position: "absolute", left: 0, bottom: 0, width: tile, height }}
+        style={{
+          position: "absolute",
+          left: -padX,
+          bottom: 0,
+          width: tile + 2 * padX,
+          height: height + padTop,
+          paddingHorizontal: padX,
+          paddingTop: padTop,
+        }}
       >
         <CharacterSprite
           theme={theme}
@@ -401,6 +416,7 @@ const SpeechBubble = memo(function SpeechBubble({
         justifyContent: "center",
         gap: 4,
         opacity,
+        zIndex: ABOVE_ROOM + 1,
       }}
     >
       {bubble.tone === "tool" ? <Icon name="Wrench" size={10} color={colors.foregroundMuted} /> : null}
@@ -473,6 +489,7 @@ const Marker = memo(function Marker({
             borderRadius: 1,
             backgroundColor: theme.colors.accent,
             opacity: 0.5,
+            zIndex: ABOVE_ROOM,
             transform: [{ rotate: `${link.angle}deg` }],
           }}
         />
@@ -483,6 +500,7 @@ const Marker = memo(function Marker({
           position: "absolute",
           left: 0,
           top: 0,
+          zIndex: ABOVE_ROOM,
           transform: [
             {
               translateX: progress.interpolate({

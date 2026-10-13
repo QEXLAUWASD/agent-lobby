@@ -1,4 +1,4 @@
-import type { PaseoApi } from "@getpaseo/client";
+import type { PaseoAgentTimelineEvent, PaseoApi } from "@getpaseo/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   EMPTY_FEED,
@@ -12,7 +12,8 @@ import {
   type FeedEvent,
   type FeedState,
 } from "./exchanges";
-import { FEED_CAP, isWanted, planFeed, type FeedCandidate } from "./feed-plan";
+import { hubFor } from "./feed-hub";
+import { FEED_CAP, FEED_RETRY_MS, isWanted, planFeed, type FeedCandidate } from "./feed-plan";
 
 /** Stream chunks arrive many times a second; the view hears about them this often. */
 const FLUSH_MS = 150;
@@ -24,7 +25,7 @@ export interface Feed {
   bubbles: ReadonlyMap<string, Bubble>;
   /** Messages in flight between agents right now, oldest first. */
   exchanges: readonly Exchange[];
-  /** The agents with a live timeline subscription; everyone else is state only. */
+  /** The agents this view has a live timeline for; everyone else is state only. */
   live: ReadonlySet<string>;
 }
 
@@ -36,7 +37,8 @@ export interface FeedOptions {
 
 /**
  * Live bubbles and exchanges for the agents a view is showing. Pass the agents
- * of the visible room; `planFeed` picks which of them are subscribed.
+ * of the visible room; `planFeed` picks which of them this view wants, and the
+ * hub grants them out of one budget shared by every mounted view.
  */
 export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], options?: FeedOptions): Feed {
   const enabled = options?.enabled ?? true;
@@ -53,6 +55,13 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
 
   useEffect(() => {
     let alive = true;
+    // Every mounted Crew view on this connection draws on the same budget.
+    const hub = hubFor<PaseoAgentTimelineEvent>(paseo, () => ({
+      subscribe(agentId, handler) {
+        const stop = paseo.agents.ref(agentId).timeline.subscribe(handler);
+        return { stop: () => stop(), ready: stop.ready };
+      },
+    }));
     const subscriptions = new Map<string, { since: number; stop: () => void }>();
     const lastWanted = new Map<string, number>();
     const failed = new Map<string, number>();
@@ -86,35 +95,35 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
 
     const open = (agentId: string) => {
       const entry = { since: Date.now(), stop: () => {} };
-      subscriptions.set(agentId, entry);
-      try {
-        const stop = paseo.agents.ref(agentId).timeline.subscribe((update) => {
-          if (subscriptions.get(agentId) !== entry) return;
-          switch (update.event.type) {
-            case "error":
-              // The SDK has already released the subscription.
-              subscriptions.delete(agentId);
-              failed.set(agentId, Date.now());
-              sync.current();
-              return;
-            case "subscription_restored":
-              backfill(agentId);
-              return;
-            case "replacement":
-              enqueue(eventsFromStream(update, Date.now()));
-              backfill(agentId);
-              return;
-            default:
-              enqueue(eventsFromStream(update, Date.now()));
-          }
-        });
-        entry.stop = stop;
-        // Live delivery only starts once the daemon confirms; what came before is history.
-        stop.ready.then(() => backfill(agentId)).catch(() => {});
-      } catch {
-        subscriptions.delete(agentId);
+      const lease = hub.acquire(agentId, (update) => {
+        if (subscriptions.get(agentId) !== entry) return;
+        switch (update.event.type) {
+          case "error":
+            // The SDK has already released the subscription.
+            subscriptions.delete(agentId);
+            failed.set(agentId, Date.now());
+            sync.current();
+            return;
+          case "subscription_restored":
+            backfill(agentId);
+            return;
+          case "replacement":
+            enqueue(eventsFromStream(update, Date.now()));
+            backfill(agentId);
+            return;
+          default:
+            enqueue(eventsFromStream(update, Date.now()));
+        }
+      });
+      if (!lease) {
+        // The plugin-wide budget is spent, or the daemon refused: ask again after the retry delay.
         failed.set(agentId, Date.now());
+        return;
       }
+      entry.stop = lease.release;
+      subscriptions.set(agentId, entry);
+      // Live delivery only starts once the daemon confirms; what came before is history.
+      lease.ready.then(() => backfill(agentId)).catch(() => {});
     };
 
     sync.current = () => {
@@ -141,8 +150,11 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
         lastWanted.delete(id);
       }
       for (const id of plan.subscribe) open(id);
-      if (plan.recheckAt !== null) {
-        recheckTimer = setTimeout(() => sync.current(), Math.max(50, plan.recheckAt - at));
+      // A refused agent is not in this plan's recheck; come back for it after the retry delay.
+      const refused = plan.subscribe.some((id) => !subscriptions.has(id));
+      const recheckAt = Math.min(plan.recheckAt ?? Infinity, refused ? at + FEED_RETRY_MS : Infinity);
+      if (Number.isFinite(recheckAt)) {
+        recheckTimer = setTimeout(() => sync.current(), Math.max(50, recheckAt - at));
       }
       const keep = new Set([...visible.map((candidate) => candidate.id), ...subscriptions.keys()]);
       setFeed((current) => retainAgents(current, keep));
