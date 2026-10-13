@@ -1,7 +1,7 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import type { Exchange } from "./exchanges";
 import { STATE_LABEL, displayTitle, matches, roleOf, type CrewNode, type CrewState } from "./model";
-import type { Office, Point } from "./office-model";
+import type { Office, Point, Presence } from "./office-model";
 
 /**
  * Everything the scene decides that is not drawing: how big a tile is, how a
@@ -72,21 +72,25 @@ export interface Leg {
   to: Point;
   heading: Heading;
   durationMs: number;
+  /** The row to stack the walker on for this leg: the lower end, so it passes in front of who it walks past. */
+  row: number;
 }
 
-const MS_PER_TILE = 140;
-const MAX_WALK_MS = 3_000;
+/** A walking pace: just under four tiles a second. */
+export const WALK_MS_PER_TILE = 260;
+/** A stroll in the lounge is slower. */
+export const STROLL_MS_PER_TILE = 420;
+/** Past this a walk across a very tall room is hurried, evenly, to end here. */
+export const MAX_WALK_MS = 9_000;
 
-/**
- * A walk as straight legs: down to the aisle row, along it, then to the
- * destination. `aisleY` is the row under the character's own desk, which no
- * furniture stands on. Legs of no length are dropped; a long walk is sped up to
- * finish within three seconds.
- */
-export function walkLegs(from: Point, to: Point, aisleY: number): Leg[] {
-  // One step sideways (out of the chair, to stand beside it) needs no detour.
-  const beside = from.y === to.y && Math.abs(from.x - to.x) <= 1;
-  const corners: Point[] = beside ? [from, to] : [from, { x: from.x, y: aisleY }, { x: to.x, y: aisleY }, to];
+/** Somewhere a character can be, and the free row it leaves or arrives by. */
+export interface Place {
+  at: Point;
+  /** A row nothing stands on, next to `at`: the aisle under a desk, or the spot's own row in the lounge. */
+  aisleY: number;
+}
+
+function legsThrough(corners: readonly Point[], msPerTile: number): Leg[] {
   const legs: Leg[] = [];
   for (let index = 1; index < corners.length; index += 1) {
     const start = corners[index - 1] as Point;
@@ -94,13 +98,86 @@ export function walkLegs(from: Point, to: Point, aisleY: number): Leg[] {
     const distance = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
     if (distance === 0) continue;
     const heading: Heading = end.x > start.x ? "right" : end.x < start.x ? "left" : end.y > start.y ? "down" : "up";
-    legs.push({ from: start, to: end, heading, durationMs: distance * MS_PER_TILE });
+    legs.push({ from: start, to: end, heading, durationMs: distance * msPerTile, row: Math.max(start.y, end.y) });
   }
+  return legs;
+}
+
+/**
+ * A walk between two places as straight legs, at a constant pace. Nobody walks
+ * through a desk: a walker steps to its aisle row, follows it to the room's
+ * corridor (the free column inside the left wall), takes the corridor to the
+ * destination's aisle row, and follows that to the destination. On the same
+ * aisle the corridor is skipped, and one step sideways (out of the chair to
+ * stand beside it) is taken directly.
+ */
+export function walkPath(from: Place, to: Place, corridorX: number): Leg[] {
+  const a = from.at;
+  const b = to.at;
+  let corners: Point[];
+  if (a.y === b.y && Math.abs(a.x - b.x) <= 1) corners = [a, b];
+  else if (from.aisleY === to.aisleY) corners = [a, { x: a.x, y: from.aisleY }, { x: b.x, y: to.aisleY }, b];
+  else {
+    corners = [
+      a,
+      { x: a.x, y: from.aisleY },
+      { x: corridorX, y: from.aisleY },
+      { x: corridorX, y: to.aisleY },
+      { x: b.x, y: to.aisleY },
+      b,
+    ];
+  }
+  const legs = legsThrough(corners, WALK_MS_PER_TILE);
   const total = legs.reduce((sum, leg) => sum + leg.durationMs, 0);
   if (total > MAX_WALK_MS) {
     for (const leg of legs) leg.durationMs = Math.round((leg.durationMs * MAX_WALK_MS) / total);
   }
   return legs;
+}
+
+/** A stroll between two spots of the lounge, which is open floor: across, then up or down. */
+export function strollPath(from: Point, to: Point): Leg[] {
+  return legsThrough([from, { x: to.x, y: from.y }, to], STROLL_MS_PER_TILE);
+}
+
+/** How long a wanderer stands at its `step`-th stop before moving on. */
+export function strollPause(step: number): number {
+  return 2_400 + (step % 4) * 900;
+}
+
+/** Where a character belongs: in its chair, beside it, in the lounge, or out of the room. */
+export type Spot = "seat" | "stand" | "lounge" | "out";
+
+export interface Standing {
+  spot: Spot;
+  at: Point;
+  /** Pixels per tile. */
+  tile: number;
+}
+
+/**
+ * How a character gets to where it now belongs.
+ *
+ * - `walk`: its spot changed. That is the agent's own doing (it started work,
+ *   finished, went idle, closed, came back), so it walks.
+ * - `enter`: it was not in the room a moment ago and the room was, so it walks
+ *   in from the door.
+ * - `snap`: the same spot is somewhere else, or the scale changed. That is the
+ *   room moving (a reflow, a resize), not the character; it is placed.
+ * - `stay`: nothing changed.
+ *
+ * A character that changes spot during a reflow walks from where its old spot
+ * is in the new layout, so only the agent's own move is shown as a walk.
+ */
+export function moveKind(
+  previous: Standing | null,
+  next: Standing,
+  roomWasHere: boolean,
+): "stay" | "snap" | "walk" | "enter" {
+  if (!previous) return roomWasHere && next.spot !== "out" ? "enter" : "snap";
+  if (previous.tile !== next.tile) return "snap";
+  if (previous.spot !== next.spot) return "walk";
+  return previous.at.x === next.at.x && previous.at.y === next.at.y ? "stay" : "snap";
 }
 
 /** The loop a wanderer walks: its home tile, then three others in its range, the same every time. */
@@ -129,15 +206,12 @@ export interface MarkerPath {
 /**
  * Where a message travels. Between two agents in the office (seated, or
  * visiting) it goes from one to the other, also across rooms. When the sender is unknown or sits in a room this office does
- * not show, it comes in through the door of the recipient's room (the middle of
- * its top wall); when only the sender is here, it leaves through the sender's
- * door. With neither end here there is nothing to draw.
+ * not show, it comes in through the door of the recipient's room; when only
+ * the sender is here, it leaves through the sender's door. With neither end here there is nothing to draw.
  */
 export function markerPath(exchange: Pick<Exchange, "from" | "to">, office: Office): MarkerPath | null {
-  const door = (agentId: string): Point | null => {
-    const room = office.rooms.find((entry) => entry.workspaceId === office.roomOf.get(agentId));
-    return room ? { x: room.x + Math.floor(room.width / 2), y: room.y } : null;
-  };
+  const door = (agentId: string): Point | null =>
+    office.rooms.find((entry) => entry.workspaceId === office.roomOf.get(agentId))?.door ?? null;
   const spot = (agentId: string) => office.desks.get(agentId)?.seat ?? office.visitors.get(agentId)?.at ?? null;
   const to = spot(exchange.to);
   const from = exchange.from ? spot(exchange.from) : null;
@@ -183,7 +257,52 @@ export function linkBetween(from: Point, to: Point, tile: number): Link {
   };
 }
 
+const SPOT: Record<Presence["activity"], Spot> = {
+  typing: "seat",
+  stuck: "seat",
+  asleep: "seat",
+  asking: "stand",
+  done: "stand",
+  wandering: "lounge",
+  visiting: "lounge",
+  away: "out",
+};
+
+/** The spot an activity is done at. */
+export function spotOf(activity: Presence["activity"]): Spot {
+  return SPOT[activity];
+}
+
 export const BUBBLE_HEIGHT = 20;
+
+export interface Track {
+  inputRange: [number, number];
+  outputRange: [number, number];
+}
+
+/**
+ * How a bubble follows a walking character without leaving the office: its
+ * left edge as a function of the character's x, and its top as a function of
+ * the character's y, each a slope-one line clamped at the office's edges. The
+ * scene feeds these to `Animated.interpolate`, so following costs no render.
+ */
+export function bubbleTrack(
+  bubbleWidth: number,
+  bubbleHeight: number,
+  tile: number,
+  officeWidthPx: number,
+): { x: Track & { fixed: number | null }; y: Track } {
+  const min = 2;
+  const max = officeWidthPx - bubbleWidth - 2;
+  // left = x + tile / 2 - width / 2, held within [min, max].
+  const shift = tile / 2 - bubbleWidth / 2;
+  const lift = (CHARACTER_HEIGHT - 1) * tile + bubbleHeight + 4;
+  return {
+    x: { inputRange: [min - shift, Math.max(min, max) - shift + (max <= min ? 1 : 0)], outputRange: [min, Math.max(min, max) + (max <= min ? 1 : 0)], fixed: max <= min ? min : null },
+    // top = y - lift, never above the office.
+    y: { inputRange: [lift, lift + 1], outputRange: [0, 1] },
+  };
+}
 
 /** A bubble's box in pixels: centred over the character's head, kept inside the office. */
 export function bubbleBox(at: Point, text: string, tile: number, officeWidthPx: number): { left: number; top: number; width: number } {

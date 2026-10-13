@@ -1,7 +1,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import type { PaseoAgent } from "@getpaseo/client";
-import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Animated,
   Easing,
@@ -14,23 +14,32 @@ import {
 } from "react-native";
 import type { Bubble, Exchange } from "./exchanges";
 import { STATE_LABEL, summary, type CrewNode } from "./model";
-import { DESK_WIDTH, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
+import { DESK_WIDTH, loungeHome, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
 import {
   BUBBLE_HEIGHT,
   CHARACTER_HEIGHT,
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
   bubbleBox,
+  bubbleTrack,
   characterLabel,
   linkBetween,
   markerPath,
   markerProgress,
+  moveKind,
   roomsInView,
+  spotOf,
   spriteRole,
+  strollPath,
+  strollPause,
   touchSlop,
-  walkLegs,
+  walkPath,
   wanderCircuit,
   type Heading,
+  type Leg,
+  type Place,
+  type Spot,
+  type Standing,
 } from "./scene-model";
 import {
   ChairSprite,
@@ -43,7 +52,8 @@ import {
 } from "./sprites";
 import { font, stateColor } from "./ui";
 
-const FRAME_MS = 280;
+/** One tick is a walking step; typing and emotes change every other tick. */
+const TICK_MS = 140;
 const DIMMED = 0.28;
 /**
  * Characters are stacked by the row they stand on. Messages and speech are not
@@ -52,34 +62,37 @@ const DIMMED = 0.28;
 const ABOVE_ROOM = 100_000;
 
 /** One interval for every animated sprite in the scene; it runs only while somebody is listening. */
-const frames = (() => {
-  let frame = 0;
+const ticker = (() => {
+  let tick = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
-  const listeners = new Set<() => void>();
-  return {
-    read: () => frame,
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      timer ??= setInterval(() => {
-        frame = (frame + 1) % 1024;
-        for (const notify of listeners) notify();
-      }, FRAME_MS);
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0 && timer) {
-          clearInterval(timer);
-          timer = null;
-        }
-      };
-    },
+  const fast = new Set<() => void>();
+  const slow = new Set<() => void>();
+  const listen = (listeners: Set<() => void>) => (listener: () => void) => {
+    listeners.add(listener);
+    timer ??= setInterval(() => {
+      tick = (tick + 1) % 4096;
+      for (const notify of fast) notify();
+      if (tick % 2 === 0) for (const notify of slow) notify();
+    }, TICK_MS);
+    return () => {
+      listeners.delete(listener);
+      if (fast.size + slow.size === 0 && timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
   };
+  return { fast: listen(fast), slow: listen(slow), step: () => tick, beat: () => tick >> 1 };
 })();
 const still = () => () => {};
 const zero = () => 0;
 
-/** The shared frame counter while `active`, otherwise a constant 0 and no subscription. */
-function useFrame(active: boolean): number {
-  return useSyncExternalStore(active ? frames.subscribe : still, active ? frames.read : zero);
+/** A frame counter from the shared timer: every tick for a walk, every other tick otherwise, 0 when off. */
+function useFrame(pace: "walk" | "slow" | "off"): number {
+  return useSyncExternalStore(
+    pace === "walk" ? ticker.fast : pace === "slow" ? ticker.slow : still,
+    pace === "walk" ? ticker.step : pace === "slow" ? ticker.beat : zero,
+  );
 }
 
 const POSE: Record<Presence["activity"], CharacterPose> = {
@@ -93,187 +106,285 @@ const POSE: Record<Presence["activity"], CharacterPose> = {
   visiting: "stand",
 };
 
+type Places = Record<Spot, Place>;
+
 interface CharacterProps {
   theme: PluginTheme;
   tile: number;
   agent: PaseoAgent;
   presence: Presence;
-  /** The row the character walks along: the one under its own desk. */
-  aisleY: number;
+  /** Where each spot is for this character in the current layout. */
+  places: Places;
+  /** Changes when any of `places`, or the range it may stroll, does. */
+  placesKey: string;
+  /** The free column it takes between rows. */
+  corridorX: number;
+  /** Its room was already drawn when it appeared: it walks in from the door. */
+  enter: boolean;
+  /** It is no longer in the office: it walks out and reports back. */
+  leaving: boolean;
+  /** The character's position in pixels, shared with whatever follows it. */
+  position: Animated.ValueXY;
+  visiting: boolean;
   saying: string | null;
   selected: boolean;
   dimmed: boolean;
   still: boolean;
   onPress: (agentId: string) => void;
+  onGone: (agentId: string) => void;
 }
 
 /**
- * A character walks to wherever its presence puts it. The walk and the lounge
- * circuit run on the native driver; under reduced motion it is simply placed.
+ * A character belongs at a spot: its chair, beside it, the lounge, or out of
+ * the room. When its spot changes it walks there along the aisle and the
+ * corridor; when the same spot is somewhere else the room moved, and it is
+ * placed. Under reduced motion it is always placed. Positions run on the
+ * animation driver, and the walk cycle on the scene's one timer, so a walking
+ * character costs a render per step, not per frame.
  */
-const Character = memo(function Character({
-  theme,
-  tile,
-  agent,
-  presence,
-  aisleY,
-  saying,
-  selected,
-  dimmed,
-  still: reduced,
-  onPress,
-}: CharacterProps) {
-  const { at, activity, range } = presence;
-  const position = useRef(new Animated.ValueXY({ x: at.x * tile, y: at.y * tile })).current;
-  const last = useRef<{ at: Point; tile: number }>({ at, tile });
-  const [walking, setWalking] = useState<Heading | null>(null);
-  const wanders = activity === "wandering" && range !== null && !reduced;
-  const visiting = activity === "visiting";
-  // The presence object is rebuilt on every directory update; the walk must only restart when it really changed.
-  const rangeRef = useRef(range);
-  rangeRef.current = range;
-  const rangeKey = range ? `${range.x},${range.y},${range.width},${range.height}` : "";
+const Character = memo(
+  function Character({
+    theme,
+    tile,
+    agent,
+    presence,
+    places,
+    placesKey,
+    corridorX,
+    enter,
+    leaving,
+    position,
+    visiting,
+    saying,
+    selected,
+    dimmed,
+    still: reduced,
+    onPress,
+    onGone,
+  }: CharacterProps) {
+    const { activity, range } = presence;
+    const spot: Spot = leaving ? "out" : spotOf(activity);
+    const strolls = activity === "wandering" && range !== null && !reduced && !leaving;
+    const [walking, setWalking] = useState<Heading | null>(null);
+    const [row, setRow] = useState(places[spot].at.y);
+    // Whether it has reached "out"; until then a leaving character is still drawn.
+    const [gone, setGone] = useState(spot === "out");
 
-  useEffect(() => {
-    const from = last.current;
-    last.current = { at, tile };
-    let cancelled = false;
-    let running: Animated.CompositeAnimation | null = null;
-    const moved = from.at.x !== at.x || from.at.y !== at.y;
+    const latest = useRef({ places, range, onGone });
+    latest.current = { places, range, onGone };
+    // Only how it first appears matters; afterwards its room is always "already there".
+    const entered = useRef(enter).current;
+    const standing = useRef<Standing | null>(null);
+    const layout = useRef(placesKey);
+    // The last corner it reached, and whether that is open floor (an aisle, the corridor, the lounge).
+    const where = useRef<{ at: Point; open: boolean }>({ at: places[spot].at, open: spot === "lounge" || spot === "out" });
+    // The leg it was on when it was interrupted, so it finishes the stride before turning.
+    const stride = useRef<{ leg: Leg; endsAt: number } | null>(null);
 
-    const wander = () => {
-      const area = rangeRef.current;
-      if (cancelled || !wanders || !area) return;
-      const stops = wanderCircuit(agent.id, at, area);
-      const steps: Animated.CompositeAnimation[] = [];
-      stops.forEach((stop, index) => {
-        const previous = stops[(index + stops.length - 1) % stops.length] as Point;
-        const distance = Math.abs(stop.x - previous.x) + Math.abs(stop.y - previous.y);
-        steps.push(
-          Animated.timing(position, {
-            toValue: { x: stop.x * tile, y: stop.y * tile },
-            duration: Math.max(1, distance) * 420,
+    useEffect(() => {
+      const here = latest.current.places;
+      const place = here[spot];
+      const next: Standing = { spot, at: place.at, tile };
+      const previous = standing.current;
+      const kind = reduced ? "snap" : moveKind(previous, next, entered);
+      const reflowed = layout.current !== placesKey;
+      standing.current = next;
+      layout.current = placesKey;
+      let cancelled = false;
+      let running: Animated.CompositeAnimation | null = null;
+      let pause: ReturnType<typeof setTimeout> | null = null;
+
+      const run = (legs: Leg[], done: () => void) => {
+        const step = (index: number) => {
+          if (cancelled) return;
+          const leg = legs[index];
+          if (!leg) {
+            stride.current = null;
+            done();
+            return;
+          }
+          setWalking(leg.heading);
+          setRow(leg.row);
+          stride.current = { leg, endsAt: Date.now() + leg.durationMs };
+          running = Animated.timing(position, {
+            toValue: { x: leg.to.x * tile, y: leg.to.y * tile },
+            duration: leg.durationMs,
             easing: Easing.linear,
             useNativeDriver: true,
-          }),
-          Animated.delay(1_600 + index * 500),
-        );
-      });
-      // The circuit ends on the home tile, where it began.
-      steps.push(steps.shift() as Animated.CompositeAnimation, steps.shift() as Animated.CompositeAnimation);
-      running = Animated.loop(Animated.sequence(steps));
-      running.start();
-    };
-
-    if (reduced || !moved || from.tile !== tile) {
-      position.setValue({ x: at.x * tile, y: at.y * tile });
-      setWalking(null);
-      wander();
-    } else {
-      const legs = walkLegs(from.at, at, aisleY);
-      const step = (index: number) => {
-        if (cancelled) return;
-        const leg = legs[index];
-        if (!leg) {
-          setWalking(null);
-          wander();
-          return;
-        }
-        setWalking(leg.heading);
-        running = Animated.timing(position, {
-          toValue: { x: leg.to.x * tile, y: leg.to.y * tile },
-          duration: leg.durationMs,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        });
-        running.start(({ finished }) => finished && step(index + 1));
+          });
+          running.start(({ finished }) => {
+            if (!finished) return;
+            where.current = { at: leg.to, open: true };
+            step(index + 1);
+          });
+        };
+        step(0);
       };
-      step(0);
-    }
-    return () => {
-      cancelled = true;
-      running?.stop();
-    };
-    // `at` is read through its coordinates, `range` through its key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent.id, aisleY, at.x, at.y, position, rangeKey, reduced, tile, wanders]);
 
-  const pose: CharacterPose = walking || wanders ? "walk" : POSE[activity];
-  const animated = !reduced && (pose === "type" || pose === "walk");
-  const frame = useFrame(animated);
-  const emoteFrame = useFrame(!reduced && presence.emote !== null && walking === null);
-  const height = tile * CHARACTER_HEIGHT;
-  // The pressable itself is at least 44 px each way: a visitor or a wanderer has no desk cell behind it.
-  const padX = touchSlop(tile);
-  const padTop = Math.max(0, MIN_TOUCH - height);
-  return (
-    <Animated.View
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: tile,
-        height: tile,
-        opacity: dimmed ? DIMMED : 1,
-        zIndex: at.y,
-        transform: position.getTranslateTransform(),
-      }}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={characterLabel(agent, presence.state, saying, visiting)}
-        accessibilityState={{ selected }}
-        onPress={() => onPress(agent.id)}
+      const stroll = (stop: number, from: Point) => {
+        const area = latest.current.range;
+        if (!strolls || !area) return;
+        pause = setTimeout(() => {
+          const stops = wanderCircuit(agent.id, place.at, area);
+          const to = stops[(stop + 1) % stops.length] as Point;
+          run(strollPath(from, to), () => {
+            setWalking(null);
+            setRow(to.y);
+            stroll(stop + 1, to);
+          });
+        }, strollPause(stop));
+      };
+
+      const arrive = () => {
+        where.current = { at: place.at, open: spot === "lounge" || spot === "out" };
+        setWalking(null);
+        setRow(place.at.y);
+        setGone(spot === "out");
+        if (leaving) latest.current.onGone(agent.id);
+        else stroll(0, place.at);
+      };
+
+      if (kind === "snap") {
+        stride.current = null;
+        position.setValue({ x: place.at.x * tile, y: place.at.y * tile });
+        arrive();
+      } else {
+        setGone(false);
+        const legs: Leg[] = [];
+        if (kind === "enter") {
+          where.current = { at: here.out.at, open: true };
+          position.setValue({ x: here.out.at.x * tile, y: here.out.at.y * tile });
+        } else if (reflowed && previous) {
+          // The room moved while it changes spot: start from where its old spot is now.
+          stride.current = null;
+          where.current = { at: here[previous.spot].at, open: previous.spot === "lounge" || previous.spot === "out" };
+          position.setValue({ x: where.current.at.x * tile, y: where.current.at.y * tile });
+        } else if (stride.current) {
+          const { leg, endsAt } = stride.current;
+          legs.push({ ...leg, durationMs: Math.max(60, endsAt - Date.now()) });
+          // A stride that ends in its old chair, or beside it, ends at the desk, not on open floor.
+          const old = previous ? here[previous.spot] : null;
+          const atDesk =
+            old !== null &&
+            (previous?.spot === "seat" || previous?.spot === "stand") &&
+            old.at.x === leg.to.x &&
+            old.at.y === leg.to.y;
+          where.current = { at: leg.to, open: !atDesk };
+        }
+        const from = where.current;
+        const fromPlace: Place = {
+          at: from.at,
+          aisleY: from.open ? from.at.y : here[previous?.spot ?? spot].aisleY,
+        };
+        legs.push(...walkPath(fromPlace, place, corridorX));
+        run(legs, arrive);
+      }
+      return () => {
+        cancelled = true;
+        running?.stop();
+        if (pause) clearTimeout(pause);
+      };
+      // `places` and `range` are read through `placesKey`.
+    }, [agent.id, corridorX, entered, leaving, placesKey, position, reduced, spot, strolls, tile]);
+
+    const pose: CharacterPose = walking ? "walk" : POSE[activity];
+    const frame = useFrame(reduced ? "off" : walking ? "walk" : pose === "type" ? "slow" : "off");
+    const emoteFrame = useFrame(!reduced && presence.emote !== null && walking === null ? "slow" : "off");
+    const height = tile * CHARACTER_HEIGHT;
+    // The pressable itself is at least 44 px each way: a visitor or a wanderer has no desk cell behind it.
+    const padX = touchSlop(tile);
+    const padTop = Math.max(0, MIN_TOUCH - height);
+    const hidden = gone && walking === null;
+    return (
+      <Animated.View
+        pointerEvents={hidden || leaving ? "none" : "auto"}
         style={{
           position: "absolute",
-          left: -padX,
-          bottom: 0,
-          width: tile + 2 * padX,
-          height: height + padTop,
-          paddingHorizontal: padX,
-          paddingTop: padTop,
+          left: 0,
+          top: 0,
+          width: tile,
+          height: tile,
+          opacity: hidden ? 0 : dimmed ? DIMMED : 1,
+          zIndex: row,
+          transform: position.getTranslateTransform(),
         }}
       >
-        <CharacterSprite
-          theme={theme}
-          tile={tile}
-          agentId={agent.id}
-          role={spriteRole(agent)}
-          pose={pose}
-          heading={walking ?? presence.facing}
-          frame={frame}
-        />
-      </Pressable>
-      {visiting ? (
-        <View
-          pointerEvents="none"
+        <Pressable
+          accessible={!hidden && !leaving}
+          accessibilityRole="button"
+          accessibilityLabel={characterLabel(agent, presence.state, saying, visiting)}
+          accessibilityState={{ selected }}
+          onPress={() => onPress(agent.id)}
           style={{
             position: "absolute",
-            top: tile,
-            alignSelf: "center",
-            paddingHorizontal: 3,
-            borderRadius: 3,
-            borderWidth: selected ? 1 : 0,
-            borderColor: theme.colors.accent,
-            backgroundColor: theme.colors.surface0,
+            left: -padX,
+            bottom: 0,
+            width: tile + 2 * padX,
+            height: height + padTop,
+            paddingHorizontal: padX,
+            paddingTop: padTop,
           }}
         >
-          <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 8, lineHeight: 10 }}>
-            visitor
-          </Text>
-        </View>
-      ) : null}
-      {presence.emote && walking === null ? (
-        <View
-          pointerEvents="none"
-          style={{ position: "absolute", left: presence.seated ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
-        >
-          <EmoteSprite theme={theme} tile={tile} kind={presence.emote} frame={emoteFrame} />
-        </View>
-      ) : null}
-    </Animated.View>
-  );
-});
+          <CharacterSprite
+            theme={theme}
+            tile={tile}
+            agentId={agent.id}
+            role={spriteRole(agent)}
+            pose={pose}
+            heading={walking ?? presence.facing}
+            frame={frame}
+          />
+        </Pressable>
+        {visiting ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: tile,
+              alignSelf: "center",
+              paddingHorizontal: 3,
+              borderRadius: 3,
+              borderWidth: selected ? 1 : 0,
+              borderColor: theme.colors.accent,
+              backgroundColor: theme.colors.surface0,
+            }}
+          >
+            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 8, lineHeight: 10 }}>
+              visitor
+            </Text>
+          </View>
+        ) : null}
+        {presence.emote && walking === null && !hidden ? (
+          <View
+            pointerEvents="none"
+            style={{ position: "absolute", left: presence.seated ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
+          >
+            <EmoteSprite theme={theme} tile={tile} kind={presence.emote} frame={emoteFrame} />
+          </View>
+        ) : null}
+      </Animated.View>
+    );
+  },
+  (before, after) =>
+    before.theme === after.theme &&
+    before.tile === after.tile &&
+    before.agent === after.agent &&
+    before.placesKey === after.placesKey &&
+    before.corridorX === after.corridorX &&
+    before.leaving === after.leaving &&
+    before.position === after.position &&
+    before.visiting === after.visiting &&
+    before.saying === after.saying &&
+    before.selected === after.selected &&
+    before.dimmed === after.dimmed &&
+    before.still === after.still &&
+    before.onPress === after.onPress &&
+    before.presence.activity === after.presence.activity &&
+    before.presence.state === after.presence.state &&
+    before.presence.emote === after.presence.emote &&
+    before.presence.facing === after.presence.facing &&
+    before.presence.seated === after.presence.seated,
+);
 
 interface DeskProps {
   theme: PluginTheme;
@@ -363,14 +474,15 @@ const SpeechBubble = memo(function SpeechBubble({
   theme,
   tile,
   bubble,
-  at,
+  position,
   officeWidth,
   still: reduced,
 }: {
   theme: PluginTheme;
   tile: number;
   bubble: Bubble;
-  at: Point;
+  /** The speaker's position, so the bubble walks with it. */
+  position: Animated.ValueXY;
   officeWidth: number;
   still: boolean;
 }) {
@@ -396,15 +508,16 @@ const SpeechBubble = memo(function SpeechBubble({
   const text =
     bubble.tone === "tool" && bubble.status === "failed" ? `${bubble.text} failed` : bubble.text;
   // A tool bubble carries an icon; leave room for it.
-  const box = bubbleBox(at, bubble.tone === "tool" ? `${text}   ` : text, tile, officeWidth);
+  const { width } = bubbleBox({ x: 0, y: 0 }, bubble.tone === "tool" ? `${text}   ` : text, tile, officeWidth);
+  const track = useMemo(() => bubbleTrack(width, BUBBLE_HEIGHT, tile, officeWidth), [width, tile, officeWidth]);
   return (
     <Animated.View
       pointerEvents="none"
       style={{
         position: "absolute",
-        left: box.left,
-        top: box.top,
-        width: box.width,
+        left: 0,
+        top: 0,
+        width,
         height: BUBBLE_HEIGHT,
         paddingHorizontal: 6,
         borderRadius: 6,
@@ -417,6 +530,21 @@ const SpeechBubble = memo(function SpeechBubble({
         gap: 4,
         opacity,
         zIndex: ABOVE_ROOM + 1,
+        transform: [
+          {
+            translateX:
+              track.x.fixed ??
+              position.x.interpolate({ inputRange: track.x.inputRange, outputRange: track.x.outputRange, extrapolate: "clamp" }),
+          },
+          {
+            translateY: position.y.interpolate({
+              inputRange: track.y.inputRange,
+              outputRange: track.y.outputRange,
+              extrapolateLeft: "clamp",
+              extrapolateRight: "extend",
+            }),
+          },
+        ],
       }}
     >
       {bubble.tone === "tool" ? <Icon name="Wrench" size={10} color={colors.foregroundMuted} /> : null}
@@ -576,6 +704,20 @@ const RoomSign = memo(function RoomSign({
   );
 });
 
+interface CastMember {
+  agentId: string;
+  agent: PaseoAgent;
+  presence: Presence;
+  places: Places;
+  placesKey: string;
+  corridorX: number;
+  roomId: string;
+  visiting: boolean;
+}
+
+/** More than this leaving at once is a change of view, not people leaving: they are dropped. */
+const MAX_DEPARTING = 4;
+
 export interface OfficeSceneProps {
   theme: PluginTheme;
   office: Office;
@@ -650,6 +792,78 @@ export function OfficeScene({
   const seated = useMemo(() => [...office.desks.values()], [office]);
   const dim = (agentId: string) => highlighted !== null && !highlighted.has(agentId);
 
+  // Everyone who can be drawn as a character, with where each of their spots is in this layout.
+  const cast = useMemo(() => {
+    const rooms = new Map(office.rooms.map((room) => [room.workspaceId, room]));
+    const out = new Map<string, CastMember>();
+    const add = (agentId: string, agent: PaseoAgent, room: Room, desk: Desk | null, spot: Point | null) => {
+      const presence = presences.get(agentId);
+      if (!presence) return;
+      const home = spot ?? (presence.activity === "wandering" ? presence.at : loungeHome(agentId, room.lounge).at);
+      const lounge: Place = { at: home, aisleY: home.y };
+      const places: Places = {
+        seat: desk ? { at: desk.seat, aisleY: desk.aisleY } : lounge,
+        stand: desk ? { at: desk.stand, aisleY: desk.aisleY } : lounge,
+        lounge,
+        out: { at: room.door, aisleY: room.door.y },
+      };
+      const { range } = presence;
+      const placesKey = [
+        ...(["seat", "stand", "lounge", "out"] as const).map((name) => `${places[name].at.x},${places[name].at.y},${places[name].aisleY}`),
+        range ? `${range.x},${range.y},${range.width},${range.height}` : "",
+      ].join("|");
+      out.set(agentId, { agentId, agent, presence, places, placesKey, corridorX: room.corridorX, roomId: room.workspaceId, visiting: desk === null });
+    };
+    for (const desk of seated) {
+      const node = nodes.get(desk.agentId);
+      const room = rooms.get(office.roomOf.get(desk.agentId) ?? "");
+      if (node && room) add(desk.agentId, node.agent, room, desk, null);
+    }
+    for (const visitor of office.visitors.values()) {
+      const agent = agents.get(visitor.agentId);
+      const room = rooms.get(visitor.workspaceId);
+      if (agent && room) add(visitor.agentId, agent, room, null, visitor.at);
+    }
+    return out;
+  }, [office, seated, nodes, agents, presences]);
+
+  // What was drawn last time: a character new to a room that was already there walks in,
+  // and one that left a room that is still there walks out before it is dropped.
+  const drawn = useRef<{ tile: number; rooms: Set<string>; cast: Map<string, CastMember> } | null>(null);
+  const departing = useRef(new Map<string, CastMember>());
+  const positions = useRef(new Map<string, Animated.ValueXY>());
+  const [, redraw] = useState(0);
+  const before = drawn.current;
+  const sameScale = before?.tile === tile;
+  const roomIds = new Set(office.rooms.map((room) => room.workspaceId));
+  for (const id of cast.keys()) departing.current.delete(id);
+  if (before && sameScale && !reduced) {
+    for (const [id, member] of before.cast) {
+      if (cast.has(id) || departing.current.has(id)) continue;
+      if (roomIds.has(member.roomId) && departing.current.size < MAX_DEPARTING) departing.current.set(id, member);
+    }
+  } else departing.current.clear();
+  const entering = (member: CastMember) => Boolean(before && sameScale && before.rooms.has(member.roomId) && !before.cast.has(member.agentId));
+  const positionOf = (member: CastMember, enter: boolean) => {
+    let position = positions.current.get(member.agentId);
+    if (!position) {
+      const start = enter && !reduced ? member.places.out.at : member.places[spotOf(member.presence.activity)].at;
+      position = new Animated.ValueXY({ x: start.x * tile, y: start.y * tile });
+      positions.current.set(member.agentId, position);
+    }
+    return position;
+  };
+  useEffect(() => {
+    drawn.current = { tile, rooms: roomIds, cast };
+    for (const id of positions.current.keys()) {
+      if (!cast.has(id) && !departing.current.has(id)) positions.current.delete(id);
+    }
+  });
+  const onGone = useCallback((agentId: string) => {
+    if (departing.current.delete(agentId)) redraw((count) => count + 1);
+  }, []);
+  const everyone = [...cast.values(), ...departing.current.values()];
+
   return (
     <ScrollView style={{ flex: 1 }} onScroll={onScroll} onLayout={onLayout} scrollEventThrottle={200}>
       {/* Only a width too narrow for one desk scrolls sideways. */}
@@ -684,43 +898,29 @@ export function OfficeScene({
               />
             );
           })}
-          {seated.map((desk) => {
-            const node = nodes.get(desk.agentId);
-            const presence = presences.get(desk.agentId);
-            if (!node || !presence?.visible) return null;
+          {everyone.map((member) => {
+            const leaving = !cast.has(member.agentId);
+            const enter = !leaving && entering(member);
             return (
               <Character
-                key={desk.agentId}
+                key={member.agentId}
                 theme={theme}
                 tile={tile}
-                agent={node.agent}
-                presence={presence}
-                aisleY={desk.aisleY}
-                saying={bubbles.get(desk.agentId)?.text ?? null}
-                selected={selected === desk.agentId}
-                dimmed={dim(desk.agentId)}
+                agent={member.agent}
+                presence={member.presence}
+                places={member.places}
+                placesKey={member.placesKey}
+                corridorX={member.corridorX}
+                enter={enter}
+                leaving={leaving}
+                position={positionOf(member, enter)}
+                visiting={member.visiting}
+                saying={bubbles.get(member.agentId)?.text ?? null}
+                selected={selected === member.agentId}
+                dimmed={dim(member.agentId)}
                 still={reduced}
                 onPress={onSelect}
-              />
-            );
-          })}
-          {[...office.visitors.values()].map((visitor) => {
-            const agent = agents.get(visitor.agentId);
-            const presence = presences.get(visitor.agentId);
-            if (!agent || !presence) return null;
-            return (
-              <Character
-                key={visitor.agentId}
-                theme={theme}
-                tile={tile}
-                agent={agent}
-                presence={presence}
-                aisleY={visitor.at.y}
-                saying={bubbles.get(visitor.agentId)?.text ?? null}
-                selected={selected === visitor.agentId}
-                dimmed={dim(visitor.agentId)}
-                still={reduced}
-                onPress={onSelect}
+                onGone={onGone}
               />
             );
           })}
@@ -728,15 +928,16 @@ export function OfficeScene({
             <Marker key={exchange.id} theme={theme} tile={tile} exchange={exchange} office={office} still={reduced} />
           ))}
           {[...bubbles.values()].map((bubble) => {
-            const presence = presences.get(bubble.agentId);
-            if (!presence?.visible || dim(bubble.agentId)) return null;
+            const member = cast.get(bubble.agentId);
+            const position = positions.current.get(bubble.agentId);
+            if (!member || !position || !member.presence.visible || dim(bubble.agentId)) return null;
             return (
               <SpeechBubble
                 key={`${bubble.agentId}:${bubble.key}`}
                 theme={theme}
                 tile={tile}
                 bubble={bubble}
-                at={presence.at}
+                position={position}
                 officeWidth={width}
                 still={reduced}
               />

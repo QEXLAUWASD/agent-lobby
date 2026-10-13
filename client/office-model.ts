@@ -28,10 +28,12 @@ export const DESK_HEIGHT = 3;
 export const MAX_POD_COLUMNS = 6;
 const WALL = 1;
 const GAP = 1;
+/** A free column inside the left wall, from the door down to the lounge: where characters walk between rows. */
+const CORRIDOR = 1;
 const HEADER_HEIGHT = 2;
 const LOUNGE_HEIGHT = 3;
 /** The narrowest room that still holds one desk between its walls. */
-export const MIN_ROOM_WIDTH = DESK_WIDTH + 2 * WALL;
+export const MIN_ROOM_WIDTH = DESK_WIDTH + 2 * WALL + CORRIDOR;
 /** On a wide surface rooms sit side by side, each about this wide: five desks between the walls. */
 export const ROOM_TARGET_WIDTH = 17;
 
@@ -88,6 +90,10 @@ export interface Room extends Rect {
   dormant: boolean;
   /** The strip under the top wall where a view writes the room name. */
   header: Rect;
+  /** The free column characters use to walk between rows. */
+  corridorX: number;
+  /** Where characters come in and go out: the top of the corridor, in the wall. */
+  door: Point;
   pods: Pod[];
   lounge: Lounge;
   agentCount: number;
@@ -255,13 +261,13 @@ function furnish(area: Rect): Lounge {
 }
 
 function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
-  // Desk cells stand against the side walls: a desk is narrower than its cell, which is margin enough.
-  const inner = width - 2 * WALL;
+  // Desk cells stand against the right wall and the corridor: a desk is narrower than its cell, which is margin enough.
+  const inner = width - 2 * WALL - CORRIDOR;
   const podColumns = Math.max(1, Math.min(MAX_POD_COLUMNS, Math.floor(inner / DESK_WIDTH)));
   const plans = [...group.roots]
     .sort((a, b) => bySeniority(a.agent, b.agent))
     .map((root) => planPod(root, podColumns));
-  const left = origin.x + WALL;
+  const left = origin.x + WALL + CORRIDOR;
   const top = origin.y + WALL + HEADER_HEIGHT;
   const pods: Pod[] = [];
   // Shelves: pods fill a row left to right in seniority order, then wrap.
@@ -294,6 +300,8 @@ function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
     width,
     height: lounge.y + lounge.height + WALL - origin.y,
     header: { x: origin.x + WALL, y: origin.y + WALL, width: width - 2 * WALL, height: HEADER_HEIGHT },
+    corridorX: origin.x + WALL,
+    door: { x: origin.x + WALL, y: top - 1 },
     pods,
     lounge,
     agentCount,
@@ -435,6 +443,14 @@ function hash(value: string): number {
   return result >>> 0;
 }
 
+/** The lounge tile an agent keeps returning to, and the tiles it may walk: the same for a given id and lounge. */
+export function loungeHome(agentId: string, lounge: Lounge): { at: Point; range: Rect } {
+  // The bottom lounge row holds the furniture; characters keep to the rows above it.
+  const range = { x: lounge.x + 1, y: lounge.y, width: Math.max(1, lounge.width - 2), height: Math.max(1, lounge.height - 1) };
+  const seed = hash(agentId);
+  return { at: { x: range.x + (seed % range.width), y: range.y + ((seed >>> 16) % range.height) }, range };
+}
+
 /**
  * Where a character is and what it is doing. The lounge tile depends only on
  * the agent's id and the lounge, never on who else is idle, so nobody is moved
@@ -465,10 +481,7 @@ export function presenceOf(
       if (!lounge || !(quietFor < WANDER_MS)) {
         return { ...base, activity: "asleep", at: desk.seat, facing: "up", seated: true, screenOn: false, emote: "zzz" };
       }
-      // The bottom lounge row holds the furniture; characters keep to the rows above it.
-      const range = { x: lounge.x + 1, y: lounge.y, width: Math.max(1, lounge.width - 2), height: Math.max(1, lounge.height - 1) };
-      const seed = hash(agent.id);
-      const at = { x: range.x + (seed % range.width), y: range.y + ((seed >>> 16) % range.height) };
+      const { at, range } = loungeHome(agent.id, lounge);
       return { ...base, activity: "wandering", at, facing: "down", seated: false, screenOn: false, emote: null, range };
     }
   }

@@ -7,6 +7,7 @@ import {
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
   bubbleBox,
+  bubbleTrack,
   characterLabel,
   highlighted,
   indexNodes,
@@ -15,9 +16,16 @@ import {
   markerProgress,
   roomsInView,
   sceneScale,
+  spotOf,
   spriteRole,
   touchSlop,
-  walkLegs,
+  MAX_WALK_MS,
+  STROLL_MS_PER_TILE,
+  WALK_MS_PER_TILE,
+  moveKind,
+  strollPath,
+  strollPause,
+  walkPath,
   wanderCircuit,
 } from "../client/scene-model";
 
@@ -93,32 +101,100 @@ describe("spriteRole and characterLabel", () => {
   });
 });
 
-describe("walkLegs", () => {
-  it("steps from the seat to the spot beside it in one leg", () => {
-    expect(walkLegs({ x: 4, y: 5 }, { x: 5, y: 5 }, 6)).toEqual([
-      { from: { x: 4, y: 5 }, to: { x: 5, y: 5 }, heading: "right", durationMs: 140 },
+describe("walkPath", () => {
+  const seat = { at: { x: 5, y: 4 }, aisleY: 5 };
+  const stand = { at: { x: 6, y: 4 }, aisleY: 5 };
+  const lounge = { at: { x: 9, y: 14 }, aisleY: 14 };
+  const corners = (legs: ReturnType<typeof walkPath>) => [legs[0]?.from, ...legs.map((leg) => leg.to)];
+
+  it("steps out of the chair to stand beside it in one leg, and back", () => {
+    expect(walkPath(seat, stand, 1)).toEqual([
+      { from: { x: 5, y: 4 }, to: { x: 6, y: 4 }, heading: "right", durationMs: WALK_MS_PER_TILE, row: 4 },
     ]);
-    expect(walkLegs({ x: 5, y: 5 }, { x: 4, y: 5 }, 6).map((leg) => leg.heading)).toEqual(["left"]);
+    expect(walkPath(stand, seat, 1).map((leg) => leg.heading)).toEqual(["left"]);
   });
 
-  it("goes down to the aisle, along it, then to the lounge, and back the same way", () => {
-    const out = walkLegs({ x: 4, y: 5 }, { x: 9, y: 12 }, 6);
-    expect(out.map((leg) => [leg.heading, leg.to])).toEqual([
-      ["down", { x: 4, y: 6 }],
-      ["right", { x: 9, y: 6 }],
-      ["down", { x: 9, y: 12 }],
+  it("goes by the aisle and the corridor to the lounge, never across a desk row", () => {
+    const out = walkPath(seat, lounge, 1);
+    expect(corners(out)).toEqual([
+      { x: 5, y: 4 },
+      { x: 5, y: 5 },
+      { x: 1, y: 5 },
+      { x: 1, y: 14 },
+      { x: 9, y: 14 },
     ]);
-    const back = walkLegs({ x: 9, y: 12 }, { x: 4, y: 5 }, 6);
-    expect(back.map((leg) => leg.heading)).toEqual(["up", "left", "up"]);
-    expect(back.at(-1)?.to).toEqual({ x: 4, y: 5 });
+    expect(out.map((leg) => leg.heading)).toEqual(["down", "left", "down", "right"]);
+    // Every vertical stretch between rows is in the corridor column.
+    for (const leg of out) if (leg.from.x === leg.to.x && Math.abs(leg.to.y - leg.from.y) > 1) expect(leg.from.x).toBe(1);
+    const back = walkPath(lounge, seat, 1);
+    expect(back.map((leg) => leg.heading)).toEqual(["left", "up", "right", "up"]);
+    expect(back.at(-1)?.to).toEqual(seat.at);
   });
 
-  it("is empty when nothing moves and caps a long walk at three seconds", () => {
-    expect(walkLegs({ x: 1, y: 1 }, { x: 1, y: 1 }, 1)).toEqual([]);
-    const far = walkLegs({ x: 0, y: 0 }, { x: 150, y: 90 }, 1);
+  it("skips the corridor between two desks on the same aisle", () => {
+    const neighbour = { at: { x: 11, y: 4 }, aisleY: 5 };
+    expect(corners(walkPath(seat, neighbour, 1))).toEqual([
+      { x: 5, y: 4 },
+      { x: 5, y: 5 },
+      { x: 11, y: 5 },
+      { x: 11, y: 4 },
+    ]);
+  });
+
+  it("walks at one pace: time is distance, and a leg is stacked on its lower row", () => {
+    const legs = walkPath(seat, lounge, 1);
+    for (const leg of legs) {
+      const distance = Math.abs(leg.to.x - leg.from.x) + Math.abs(leg.to.y - leg.from.y);
+      expect(leg.durationMs).toBe(distance * WALK_MS_PER_TILE);
+      expect(leg.row).toBe(Math.max(leg.from.y, leg.to.y));
+    }
+    expect(legs.reduce((sum, leg) => sum + leg.durationMs, 0)).toBe(22 * WALK_MS_PER_TILE);
+  });
+
+  it("is empty when nothing moves, and hurries a walk that would take too long", () => {
+    expect(walkPath(seat, seat, 1)).toEqual([]);
+    const far = walkPath({ at: { x: 40, y: 2 }, aisleY: 3 }, { at: { x: 40, y: 200 }, aisleY: 200 }, 1);
     const total = far.reduce((sum, leg) => sum + leg.durationMs, 0);
-    expect(total).toBeLessThanOrEqual(3_010);
-    expect(total).toBeGreaterThan(2_900);
+    expect(total).toBeLessThanOrEqual(MAX_WALK_MS + far.length);
+    expect(total).toBeGreaterThan(MAX_WALK_MS - far.length);
+  });
+});
+
+describe("strollPath", () => {
+  it("crosses the lounge across then down, slower than a walk, and pauses between", () => {
+    const legs = strollPath({ x: 3, y: 20 }, { x: 7, y: 21 });
+    expect(legs.map((leg) => [leg.heading, leg.durationMs])).toEqual([
+      ["right", 4 * STROLL_MS_PER_TILE],
+      ["down", STROLL_MS_PER_TILE],
+    ]);
+    expect(STROLL_MS_PER_TILE).toBeGreaterThan(WALK_MS_PER_TILE);
+    expect(strollPath({ x: 3, y: 20 }, { x: 3, y: 20 })).toEqual([]);
+    expect(strollPause(0)).toBeGreaterThanOrEqual(2_000);
+    expect(strollPause(5)).toBe(strollPause(1));
+  });
+});
+
+describe("moveKind", () => {
+  const seated = { spot: "seat" as const, at: { x: 5, y: 4 }, tile: 32 };
+
+  it("walks when the agent changed spot, whatever else moved", () => {
+    expect(moveKind(seated, { spot: "stand", at: { x: 6, y: 4 }, tile: 32 }, true)).toBe("walk");
+    expect(moveKind(seated, { spot: "lounge", at: { x: 9, y: 17 }, tile: 32 }, true)).toBe("walk");
+    expect(moveKind(seated, { spot: "out", at: { x: 1, y: 2 }, tile: 32 }, true)).toBe("walk");
+  });
+
+  it("places a character whose room moved under it: same spot, new tile, or a new scale", () => {
+    expect(moveKind(seated, { spot: "seat", at: { x: 5, y: 7 }, tile: 32 }, true)).toBe("snap");
+    expect(moveKind(seated, { spot: "seat", at: { x: 5, y: 4 }, tile: 48 }, true)).toBe("snap");
+    expect(moveKind(seated, { spot: "stand", at: { x: 6, y: 4 }, tile: 16 }, true)).toBe("snap");
+    expect(moveKind(seated, { ...seated, at: { x: 5, y: 4 } }, true)).toBe("stay");
+  });
+
+  it("walks a newcomer in from the door only when its room was already there", () => {
+    expect(moveKind(null, seated, true)).toBe("enter");
+    expect(moveKind(null, seated, false)).toBe("snap");
+    // Somebody who is out has nowhere to walk in to.
+    expect(moveKind(null, { spot: "out", at: { x: 1, y: 2 }, tile: 32 }, true)).toBe("snap");
   });
 });
 
@@ -149,7 +225,7 @@ describe("markerPath", () => {
   const seat = (id: string) => office.desks.get(id)?.seat;
   const door = (workspaceId: string) => {
     const room = office.rooms.find((entry) => entry.workspaceId === workspaceId);
-    return room ? { x: room.x + Math.floor(room.width / 2), y: room.y } : null;
+    return room ? room.door : null;
   };
 
   it("goes desk to desk, also across rooms", () => {
@@ -231,6 +307,38 @@ describe("bubbleBox", () => {
     const narrow = bubbleBox({ x: 2, y: 5 }, "x".repeat(48), 16, 144);
     expect(narrow.width).toBeLessThanOrEqual(140);
     expect(narrow.left).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("bubbleTrack and spotOf", () => {
+  const follow = (track: { inputRange: [number, number]; outputRange: [number, number] }, value: number, clampRight = true) => {
+    const [a, b] = track.inputRange;
+    const [c, d] = track.outputRange;
+    const t = (value - a) / (b - a);
+    return c + Math.min(clampRight ? 1 : Infinity, Math.max(0, t)) * (d - c);
+  };
+
+  it("keeps a bubble centred over a walking character and inside the office", () => {
+    const track = bubbleTrack(100, 20, 32, 640);
+    // Mid-room: left edge = x + half a tile - half the bubble.
+    expect(follow(track.x, 300)).toBeCloseTo(300 + 16 - 50);
+    expect(follow(track.x, 0)).toBe(2);
+    expect(follow(track.x, 630)).toBe(640 - 100 - 2);
+    expect(track.x.fixed).toBeNull();
+    // Above the head: top = y - (half a tile of head + bubble + gap), never negative.
+    expect(follow(track.y, 320, false)).toBeCloseTo(320 - (16 + 20 + 4));
+    expect(follow(track.y, 10, false)).toBe(0);
+  });
+
+  it("pins a bubble wider than the office to its left edge", () => {
+    expect(bubbleTrack(300, 20, 16, 144).x.fixed).toBe(2);
+  });
+
+  it("puts each activity at its spot", () => {
+    expect((["typing", "stuck", "asleep"] as const).map(spotOf)).toEqual(["seat", "seat", "seat"]);
+    expect((["asking", "done"] as const).map(spotOf)).toEqual(["stand", "stand"]);
+    expect((["wandering", "visiting"] as const).map(spotOf)).toEqual(["lounge", "lounge"]);
+    expect(spotOf("away")).toBe("out");
   });
 });
 

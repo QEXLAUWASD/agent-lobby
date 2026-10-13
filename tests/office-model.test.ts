@@ -160,7 +160,7 @@ describe("layoutOffice", () => {
 
   it("keeps the column and the order of later teams when an earlier team wraps to a new row", () => {
     const base = [agent({ id: "root" }), agent({ id: "lead" }, "root"), agent({ id: "under-lead" }, "lead")];
-    // 20 tiles wide: six desks to a pod row.
+    // 20 tiles wide: five desks to a pod row.
     const before = office(base, 20);
     const more = [...base, ...["c2", "c3", "c4", "c5", "c6"].map((id) => agent({ id }, "root"))];
     const after = office(more, 20);
@@ -245,6 +245,17 @@ describe("layoutOffice", () => {
       expect(pod?.width).toBeLessThanOrEqual(MAX_POD_COLUMNS * DESK_WIDTH);
       expect(pod?.teams).toHaveLength(7);
     }
+  });
+
+  it("keeps a free corridor inside the left wall, from the door down to the lounge", () => {
+    const layout = office(crew(), 20);
+    const room = layout.rooms[0];
+    if (!room) throw new Error("fixture");
+    expect(room.corridorX).toBe(room.x + 1);
+    expect(room.door.x).toBe(room.corridorX);
+    expect(room.door.y).toBeLessThan(Math.min(...[...layout.desks.values()].map((desk) => desk.cell.y)));
+    for (const desk of layout.desks.values()) expect(desk.cell.x).toBeGreaterThan(room.corridorX);
+    expect(room.lounge.x).toBeLessThanOrEqual(room.corridorX);
   });
 
   it("is empty for no agents", () => {
