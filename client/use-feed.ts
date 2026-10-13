@@ -17,8 +17,12 @@ import { FEED_CAP, FEED_RETRY_MS, isWanted, planFeed, type FeedCandidate } from 
 
 /** Stream chunks arrive many times a second; the view hears about them this often. */
 const FLUSH_MS = 150;
-/** Enough history to catch the message that woke an agent up, and what it said since. */
-const BACKFILL_LIMIT = 20;
+/**
+ * What a new subscription reads of the past: enough for the bubble of what the
+ * agent is doing now and an ask still open. Everything drawn comes from the
+ * last few items; older ones have expired by their own lifetimes.
+ */
+const BACKFILL_LIMIT = 6;
 
 export interface Feed {
   /** agentId → the bubble over its head right now. */
