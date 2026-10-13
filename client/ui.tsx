@@ -1,10 +1,8 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/react-native";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   AccessibilityInfo,
-  Animated,
-  Easing,
   Pressable,
   StyleSheet,
   Text,
@@ -21,6 +19,7 @@ export const pressStyle =
   (state: PressableStateCallbackType): StyleProp<ViewStyle> =>
     fn(state as PressState);
 import type { CrewState } from "./model";
+import { Pulse } from "./motion";
 
 /** Spacing steps and type sizes mirror Paseo's theme scale so the pane sits flush with host chrome. */
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 } as const;
@@ -75,31 +74,11 @@ export function StatusDot({
   pulse?: boolean;
 }) {
   const reduced = useReducedMotion();
-  const opacity = useRef(new Animated.Value(1)).current;
-  const animate = pulse && !reduced;
-  useEffect(() => {
-    if (!animate) {
-      opacity.setValue(state === "closed" ? 0.5 : 1);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, { toValue: 0.35, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [animate, opacity, state]);
   return (
-    <Animated.View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: stateColor(theme, state),
-        opacity,
-      }}
+    <Pulse
+      on={pulse && !reduced}
+      rest={state === "closed" ? 0.5 : 1}
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: stateColor(theme, state) }}
     />
   );
 }
