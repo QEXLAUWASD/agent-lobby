@@ -1,14 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Animated, Easing, Platform, StyleSheet, View, type StyleProp, type ViewProps, type ViewStyle } from "react-native";
-import { cycleSteps, frameAt, glideAt, glidePieces, type Cycle, type Glide, type Px } from "./motion-model";
+import { Animated, AppState, Easing, Platform, StyleSheet, View, type StyleProp, type ViewProps, type ViewStyle } from "react-native";
+import { frameAt, glideAt, glidePieces, nextTick, type Cycle, type Glide, type Px } from "./motion-model";
+import { ON_WEB, slideTo } from "./web";
 
 /**
  * Everything that moves. On the web React Native's `Animated` runs in
  * JavaScript and commits a render per display frame, so here a move is a CSS
  * transition and a pulse or a fade is a keyframe animation: one render when it
- * starts and none while it runs, and a loop of frames is a strip slid by a
- * stepped animation. Native keeps `Animated` on its native driver and one
- * shared timer for frames.
+ * starts and none while it runs. Native keeps `Animated` on its native driver.
+ * A loop of frames is a strip moved by one shared timer, everywhere.
  */
 const CSS = Platform.OS === "web";
 
@@ -265,57 +265,90 @@ function NativeFadeIn({ ms, still, style, children, ...rest }: ViewProps & { ms:
   );
 }
 
-/** One timer per beat length for the frame loops the platform cannot run itself; it stops when nobody listens. */
-const beats = new Map<number, { listeners: Set<() => void>; timer: ReturnType<typeof setInterval> }>();
-function onBeat(beatMs: number, listener: () => void): () => void {
-  let beat = beats.get(beatMs);
-  if (!beat) {
-    const listeners = new Set<() => void>();
-    beat = { listeners, timer: setInterval(() => listeners.forEach((notify) => notify()), beatMs) };
-    beats.set(beatMs, beat);
+/**
+ * One timer for every loop of frames on screen. It sleeps until the next
+ * moment any of them changes frame, tells those that changed, and sleeps
+ * again; with no loop playing there is no timer. The frame comes from the
+ * clock, so equal loops are in step whenever they started.
+ *
+ * Not CSS animation: while one runs, however small and however slow, the
+ * browser draws a frame for every refresh of the display. Measured in pairs on
+ * the same view, loops as CSS animations cost five to six points of a core and
+ * the same frames written by a timer cost what no animation does.
+ */
+interface Loop {
+  cycle: Cycle;
+  shown: number;
+  show(frame: number): void;
+}
+const playing = new Set<Loop>();
+let wake: ReturnType<typeof setTimeout> | null = null;
+// The app in the background (on the web: the document hidden) draws nothing: the timer stops outright
+// and catches up when the app comes back.
+let appActive = AppState.currentState !== "background";
+let watching: { remove(): void } | null = null;
+function watch(): void {
+  if (playing.size > 0 && !watching) {
+    watching = AppState.addEventListener("change", (state) => {
+      appActive = state !== "background";
+      if (appActive) tick();
+      else arm();
+    });
+  } else if (playing.size === 0 && watching) {
+    watching.remove();
+    watching = null;
   }
-  beat.listeners.add(listener);
-  return () => {
-    beat.listeners.delete(listener);
-    if (beat.listeners.size === 0) {
-      clearInterval(beat.timer);
-      beats.delete(beatMs);
+}
+function arm(): void {
+  if (wake) clearTimeout(wake);
+  wake = null;
+  if (!appActive) return;
+  const now = Date.now();
+  const cycles: Cycle[] = [];
+  for (const loop of playing) cycles.push(loop.cycle);
+  const at = nextTick(cycles, now);
+  // A touch past the moment: a timer that fires early would find nothing changed.
+  if (at !== null) wake = setTimeout(tick, at - now + 2);
+}
+function tick(): void {
+  wake = null;
+  const now = Date.now();
+  for (const loop of playing) {
+    const frame = frameAt(loop.cycle, now);
+    if (frame !== loop.shown) {
+      loop.shown = frame;
+      loop.show(frame);
     }
+  }
+  arm();
+}
+/** Plays a loop from where the clock is; the returned function stops it, leaving its frame as it is. */
+function play(cycle: Cycle, show: (frame: number) => void): () => void {
+  const loop: Loop = { cycle, shown: frameAt(cycle, Date.now()), show };
+  show(loop.shown);
+  playing.add(loop);
+  watch();
+  arm();
+  return () => {
+    playing.delete(loop);
+    watch();
+    arm();
   };
 }
-
-const never = () => () => {};
 
 /** True under a pane that is not on screen: every loop below it stands still. */
 export const MotionPaused = createContext(false);
 
-/** One keyframe per change of frame: the strip is slid to that frame and held there until the next. */
-const slides = new Map<string, ViewStyle>();
-function slideFor(count: number, cycle: Cycle): ViewStyle {
-  const key = `${count}|${cycle.frames.join(",")}`;
-  let style = slides.get(key);
-  if (!style) {
-    // As CSS text: keyframes are not put through the style preprocessor, so a transform array would be dropped.
-    const at = (frame: number) => ({ transform: `translateX(${(-100 * frame) / count}%)` });
-    const steps: Record<string, unknown> = {};
-    for (const step of cycleSteps(cycle)) steps[`${Math.round(1e4 * step.at) / 100}%`] = at(step.frame);
-    steps["100%"] = at(cycle.frames[cycle.frames.length - 1] ?? 0);
-    style = StyleSheet.create({ strip: web({ animationKeyframes: steps }) }).strip;
-    slides.set(key, style);
-  }
-  return style;
-}
-
 /**
  * A loop of frames played from a strip: `children` is one image holding
  * `count` frames side by side, each `width` by `height`, behind a window one
- * frame wide. `cycle` says which frame shows on each beat. Every loop runs on
- * the one clock, so equal cycles are in step wherever they were started.
+ * frame wide. `cycle` says which frame shows on each beat.
  *
- * On the web the strip is slid by a stepped CSS animation: no timer, no render
- * and no style written while it plays; `paused` holds it where it is. Elsewhere
- * one shared timer per beat length moves it. The caller draws a still instead
- * when nothing should move.
+ * On the web the strip is slid by writing its transform when its frame
+ * changes: nothing is rendered again while it plays. Elsewhere the frame is
+ * state, and only this view renders. `paused`, and a pane that is not shown,
+ * leave it at the frame it had. The caller draws a still instead when nothing
+ * should move.
  */
 export function Strip({
   count,
@@ -336,32 +369,18 @@ export function Strip({
 }) {
   const held = useContext(MotionPaused) || paused;
   const key = `${cycle.beatMs}:${cycle.frames.join(",")}`;
-  // How far into its loop the clock is when the animation is started; keyed by content, as a caller may build an equal cycle anew.
-  const elapsed = useMemo(() => Date.now() % (cycle.frames.length * cycle.beatMs), [key]);
-  const subscribe = useMemo(
-    () => (!CSS && !held ? (listener: () => void) => onBeat(cycle.beatMs, listener) : never),
-    [held, cycle.beatMs],
-  );
-  const frame = useSyncExternalStore(subscribe, () => (CSS ? 0 : frameAt(cycle, Date.now())));
+  const strip = useRef<View>(null);
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (held) return;
+    return play(cycle, ON_WEB ? (next) => slideTo(strip.current, (-100 * next) / count) : setFrame);
+    // Keyed by content: a caller may build an equal cycle on every render.
+  }, [key, held, count]);
   return (
     <View style={[style, { width, height, overflow: "hidden" }]}>
       <View
-        key={key}
-        style={[
-          { width: count * width, height },
-          CSS
-            ? [
-                slideFor(count, cycle),
-                web({
-                  animationDuration: `${cycle.frames.length * cycle.beatMs}ms`,
-                  animationDelay: `${-elapsed}ms`,
-                  animationTimingFunction: "step-end",
-                  animationIterationCount: "infinite",
-                  animationPlayState: held ? "paused" : "running",
-                }),
-              ]
-            : { transform: [{ translateX: -frame * width }] },
-        ]}
+        ref={strip}
+        style={[{ width: count * width, height }, ON_WEB ? null : { transform: [{ translateX: -frame * width }] }]}
       >
         {children}
       </View>

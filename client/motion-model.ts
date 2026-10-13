@@ -98,14 +98,30 @@ export function loopOf(count: number, beatMs: number): Cycle {
 }
 
 /**
- * A cycle as the moments at which the frame changes: how far through the loop
- * (0 to 1) and to which frame. The first is always at 0. A stepped animation
- * needs exactly these keyframes, each held until the next.
+ * When a cycle next shows another frame than it does at `now`: the start of the
+ * first later beat whose frame differs. Null for a cycle that never changes.
  */
-export function cycleSteps(cycle: Cycle): { at: number; frame: number }[] {
-  const steps: { at: number; frame: number }[] = [];
-  cycle.frames.forEach((frame, beat) => {
-    if (beat === 0 || frame !== cycle.frames[beat - 1]) steps.push({ at: beat / cycle.frames.length, frame });
-  });
-  return steps;
+export function nextChange(cycle: Cycle, now: number): number | null {
+  const length = cycle.frames.length;
+  if (length < 2) return null;
+  const beat = Math.floor(now / cycle.beatMs);
+  const showing = cycle.frames[beat % length];
+  for (let ahead = 1; ahead <= length; ahead += 1) {
+    if (cycle.frames[(beat + ahead) % length] !== showing) return (beat + ahead) * cycle.beatMs;
+  }
+  return null;
+}
+
+/**
+ * The one moment a timer shared by all of `cycles` has to wake at next: the
+ * earliest change among them. Null when none of them will change, and then no
+ * timer is held at all.
+ */
+export function nextTick(cycles: Iterable<Cycle>, now: number): number | null {
+  let next: number | null = null;
+  for (const cycle of cycles) {
+    const at = nextChange(cycle, now);
+    if (at !== null && (next === null || at < next)) next = at;
+  }
+  return next;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { actFrame } from "../client/scene-model";
-import { cycleSteps, frameAt, glideAt, glidePieces, loopOf, type Cycle, type Glide } from "../client/motion-model";
+import { frameAt, glideAt, glidePieces, loopOf, nextChange, nextTick, type Cycle, type Glide } from "../client/motion-model";
 
 const glide: Glide = { from: { x: 0, y: 10 }, to: { x: 100, y: 10 }, ms: 1000, at: 5000 };
 
@@ -78,45 +78,71 @@ describe("frameAt", () => {
   });
 });
 
-describe("cycleSteps", () => {
-  it("is one step per frame for a plain loop, evenly spaced from 0", () => {
-    expect(cycleSteps(loopOf(4, 140))).toEqual([
-      { at: 0, frame: 0 },
-      { at: 0.25, frame: 1 },
-      { at: 0.5, frame: 2 },
-      { at: 0.75, frame: 3 },
-    ]);
+describe("nextChange", () => {
+  it("is the start of the next beat for a plain loop", () => {
+    const type = loopOf(2, 280);
+    expect(nextChange(type, 0)).toBe(280);
+    expect(nextChange(type, 279)).toBe(280);
+    expect(nextChange(type, 280)).toBe(560);
+    expect(nextChange(loopOf(8, 320), 1_000)).toBe(1_280);
   });
 
-  it("has a step only where the frame changes, so a held frame is one keyframe", () => {
-    expect(cycleSteps({ frames: [0, 0, 1, 1, 1, 0, 0, 0, 0, 0], beatMs: 280 })).toEqual([
-      { at: 0, frame: 0 },
-      { at: 0.2, frame: 1 },
-      { at: 0.5, frame: 0 },
-    ]);
-    expect(cycleSteps({ frames: [1, 1], beatMs: 280 })).toEqual([{ at: 0, frame: 1 }]);
+  it("skips the beats a frame is held for, round the end of the loop too", () => {
+    const sip: Cycle = { frames: [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], beatMs: 280 };
+    expect(nextChange(sip, 0)).toBe(560);
+    expect(nextChange(sip, 560)).toBe(2_800);
+    expect(nextChange(sip, 2_700)).toBe(2_800);
   });
 
-  it("played as held steps shows the cycle's frame at every moment, for every loop the scene uses", () => {
-    const cycles: Cycle[] = [
-      loopOf(2, 280),
-      loopOf(4, 140),
-      loopOf(8, 320),
-      ...(["drink", "stretch", "talk", "doze"] as const).flatMap((act) =>
-        [0, 1, 6, 7].map((seed) => {
-          const beats = { drink: 10, stretch: 14, talk: 4, doze: 8 }[act];
-          return { frames: Array.from({ length: beats }, (_, beat) => actFrame(act, beat, seed)), beatMs: 280 };
-        }),
-      ),
-    ];
-    for (const cycle of cycles) {
-      const steps = cycleSteps(cycle);
-      const period = cycle.frames.length * cycle.beatMs;
-      for (let now = 7_000_011; now < 7_000_011 + 2 * period; now += 37) {
-        const through = (now % period) / period;
-        const held = [...steps].reverse().find((step) => step.at <= through);
-        expect(held?.frame).toBe(frameAt(cycle, now));
+  it("is always a moment at which the frame really changes, and none is skipped before it", () => {
+    for (const cycle of [loopOf(4, 140), loopOf(2, 900), { frames: [0, 0, 1, 0, 1, 1, 0], beatMs: 280 }]) {
+      let now = 123_457;
+      for (let step = 0; step < 40; step += 1) {
+        const at = nextChange(cycle, now)!;
+        expect(at).toBeGreaterThan(now);
+        expect(frameAt(cycle, at)).not.toBe(frameAt(cycle, now));
+        for (let t = now; t < at; t += 35) expect(frameAt(cycle, t)).toBe(frameAt(cycle, now));
+        now = at;
       }
     }
+  });
+
+  it("is null for what never changes: one frame, or the same frame on every beat", () => {
+    expect(nextChange(loopOf(1, 280), 5_000)).toBeNull();
+    expect(nextChange({ frames: [1, 1, 1], beatMs: 280 }, 5_000)).toBeNull();
+    expect(nextChange({ frames: [], beatMs: 280 }, 5_000)).toBeNull();
+  });
+});
+
+describe("nextTick", () => {
+  it("is the earliest change among the loops on screen, so one timer serves them all", () => {
+    const loops = [loopOf(2, 280), loopOf(8, 320), loopOf(2, 800)];
+    expect(nextTick(loops, 0)).toBe(280);
+    expect(nextTick(loops, 280)).toBe(320);
+    expect(nextTick(loops, 320)).toBe(560);
+    expect(nextTick(loops, 700)).toBe(800);
+  });
+
+  it("is null with no loop, or only loops that hold still: then there is no timer", () => {
+    expect(nextTick([], 1_000)).toBeNull();
+    expect(nextTick([loopOf(1, 280), { frames: [0, 0], beatMs: 900 }], 1_000)).toBeNull();
+  });
+
+  it("wakes once for loops that change together, and as rarely as the slowest loop when it is alone", () => {
+    const wakes = (loops: Cycle[], from: number, to: number) => {
+      let now = from;
+      let count = 0;
+      for (;;) {
+        const at = nextTick(loops, now);
+        if (at === null || at > to) return count;
+        count += 1;
+        now = at;
+      }
+    };
+    // Ten seconds: five typists wake the timer as often as one does.
+    expect(wakes([loopOf(2, 280)], 0, 10_000)).toBe(35);
+    expect(wakes(Array.from({ length: 5 }, () => loopOf(2, 280)), 0, 10_000)).toBe(35);
+    // A room with only finished agents: the bob alone, 1.25 a second.
+    expect(wakes([loopOf(2, 800), loopOf(2, 800)], 0, 10_000)).toBe(12);
   });
 });
