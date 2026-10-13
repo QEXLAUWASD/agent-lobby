@@ -43,7 +43,7 @@ export function stateColor(theme: PluginTheme, state: CrewState): string {
   }
 }
 
-function useReducedMotion(): boolean {
+export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
     let active = true;
