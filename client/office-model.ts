@@ -147,8 +147,9 @@ export interface Room extends Rect {
   /** The zones stand beside the desks, against the top wall, instead of under them. */
   zonesBeside: boolean;
   /**
-   * The room's closed agents, oldest first, and where their fixture hangs on
-   * the top wall. They have no desk: closing frees it.
+   * The room's closed agents, oldest first, and the tile their filing cabinet
+   * stands on, against the wall at the end of the zones. They have no desk:
+   * closing frees it.
    */
   closed: { ids: string[]; at: Point } | null;
   agentCount: number;
@@ -394,6 +395,8 @@ function furnish(left: number, top: number, contentWidth: number): Zone[] {
     const spots: UseSpot[] = [];
     for (const item of props) {
       for (const use of PROP_USES[item.id]) {
+        // Lying down takes a whole sofa; here a sofa seats two.
+        if (use.pose === "lie") continue;
         const spot = { x: item.x + use.dx, y: item.y + use.dy };
         const tile = `${spot.x},${spot.y}`;
         // One character to a tile, and nobody on the rug: whoever claimed it first has it.
@@ -507,7 +510,13 @@ interface Shape {
  * covers the least floor, so a small crew makes a small room and a wide pane is
  * used across before it is used downwards.
  */
-function shapeRoom(crews: ReadonlyArray<{ rootId: string; teams: TeamPlan[] }>, seated: number, maxInner: number): Shape {
+function shapeRoom(
+  crews: ReadonlyArray<{ rootId: string; teams: TeamPlan[] }>,
+  seated: number,
+  maxInner: number,
+  /** Tiles the closed agents' cabinet takes at the end of the zones' wall. */
+  cabinet: number,
+): Shape {
   if (seated === 0) {
     return { block: { pods: [], width: 0, height: 0 }, beside: false, zoneRoom: 0, innerWidth: MIN_INNER_WIDTH, innerHeight: BARE_ROWS };
   }
@@ -527,22 +536,22 @@ function shapeRoom(crews: ReadonlyArray<{ rootId: string; teams: TeamPlan[] }>, 
   for (let columns = 1; columns <= mostColumns; columns += 1) {
     const block = shelve(crews, columns);
     if (block.width > maxInner && columns > 1) break;
-    const under = Math.min(budget, maxInner);
+    const under = Math.min(budget, maxInner - cabinet);
     consider({
       block,
       beside: false,
       zoneRoom: under,
-      innerWidth: Math.max(block.width, zonesWidth(fitZones(under)), MIN_INNER_WIDTH),
+      innerWidth: Math.max(block.width, zonesWidth(fitZones(under)) + cabinet, MIN_INNER_WIDTH),
       innerHeight: block.height + ZONE_ROWS,
     });
-    const aside = Math.min(budget, maxInner - block.width - 1);
+    const aside = Math.min(budget, maxInner - block.width - 1 - cabinet);
     // Beside the desks only if at least a coffee machine and a sofa fit there.
     if (aside >= 4 && fitZones(aside).lounge) {
       consider({
         block,
         beside: true,
         zoneRoom: aside,
-        innerWidth: block.width + 1 + zonesWidth(fitZones(aside)),
+        innerWidth: block.width + 1 + zonesWidth(fitZones(aside)) + cabinet,
         innerHeight: Math.max(block.height, ZONE_ROWS),
       });
     }
@@ -558,7 +567,8 @@ function layoutRoom(group: CrewGroup, origin: Point, maxWidth: number, holding: 
     .map((root) => ({ rootId: root.agent.id, teams: planTeams(root, seated, away) }))
     .filter((crew) => crew.teams.length > 0);
   const agentCount = crews.reduce((sum, crew) => sum + crew.teams.reduce((inCrew, team) => inCrew + team.members.length, 0), 0);
-  const shape = shapeRoom(crews, agentCount, Math.max(DESK_WIDTH, maxWidth - 2 * WALL - CORRIDOR));
+  const cabinet = away.length > 0 ? 1 : 0;
+  const shape = shapeRoom(crews, agentCount, Math.max(DESK_WIDTH, maxWidth - 2 * WALL - CORRIDOR), cabinet);
   const width = shape.innerWidth + 2 * WALL + CORRIDOR;
   const left = origin.x + WALL + CORRIDOR;
   const top = origin.y + WALL + FACE_ROWS;
@@ -577,8 +587,10 @@ function layoutRoom(group: CrewGroup, origin: Point, maxWidth: number, holding: 
     height: rows,
     // The walkway runs the width of the room: beside the desks it is their first aisle row.
     walkway: { x: origin.x + WALL, y: stripTop + rows - 1, width: width - 2 * WALL, height: 1 },
-    // The half wall runs behind the zones only.
-    wall: lastZone ? { x: stripLeft, y: stripTop, width: lastZone.x + lastZone.width - stripLeft, height: 1 } : null,
+    // The half wall runs behind the zones, and behind the cabinet at their end.
+    wall: lastZone
+      ? { x: stripLeft, y: stripTop, width: lastZone.x + lastZone.width - stripLeft + cabinet, height: 1 }
+      : null,
   };
   const order = new Map<string, PaseoAgent>();
   const collect = (node: CrewNode) => {
@@ -587,7 +599,8 @@ function layoutRoom(group: CrewGroup, origin: Point, maxWidth: number, holding: 
   };
   group.roots.forEach(collect);
   const closedIds = away.sort((a, b) => bySeniority(order.get(a) as PaseoAgent, order.get(b) as PaseoAgent));
-  const fixture = closedIds.length > 0 ? 2 : 0;
+  // The cabinet stands against the wall at the end of the zones; in a bare room, at the head of its floor.
+  const cabinetAt = { x: lastZone ? lastZone.x + lastZone.width : left, y: stripTop };
   return {
     workspaceId: group.workspaceId,
     name: group.name,
@@ -598,8 +611,8 @@ function layoutRoom(group: CrewGroup, origin: Point, maxWidth: number, holding: 
     y: origin.y,
     width,
     height: WALL + FACE_ROWS + shape.innerHeight + WALL,
-    // The plate hangs on the top wall, to the right of the doorway; the closed fixture at the far end.
-    header: { x: left, y: origin.y, width: shape.innerWidth - fixture, height: WALL },
+    // The plate hangs on the top wall, to the right of the doorway.
+    header: { x: left, y: origin.y, width: shape.innerWidth, height: WALL },
     floorTop: top,
     corridorX: origin.x + WALL,
     door: { x: origin.x + WALL, y: top - 1 },
@@ -607,7 +620,7 @@ function layoutRoom(group: CrewGroup, origin: Point, maxWidth: number, holding: 
     lounge,
     zones,
     zonesBeside: shape.beside,
-    closed: closedIds.length > 0 ? { ids: closedIds, at: { x: origin.x + width - WALL - fixture, y: origin.y } } : null,
+    closed: closedIds.length > 0 ? { ids: closedIds, at: cabinetAt } : null,
     agentCount,
   };
 }
@@ -724,8 +737,10 @@ export type Activity =
   | "stuck"
   /** Standing by the desk with finished work to show. */
   | "done"
-  /** Recently idle, on a break: at the pantry, on the sofa, or waiting on the walkway. */
+  /** Recently idle, resting: on the sofa, at the shelves, stretching on the walkway. */
   | "wandering"
+  /** Finished and waiting to be read: at the pantry with the others who are. */
+  | "gathering"
   /** Idle for a long while, asleep at the desk. */
   | "asleep"
   /** Closed: the desk is kept, nobody is at it. */
@@ -734,6 +749,9 @@ export type Activity =
   | "visiting";
 
 export type Emote = "question" | "alert" | "check" | "zzz";
+
+/** Something a character does at a place: sipping, chatting with whoever is opposite, stretching, nodding off, reading. */
+export type Act = "drink" | "talk" | "stretch" | "doze" | "read";
 
 export interface Presence {
   agentId: string;
@@ -750,9 +768,11 @@ export interface Presence {
   seated: boolean;
   /** Sitting somewhere else: a sofa, a beanbag. */
   lounging: boolean;
+  /** What it is doing where it is, when that is more than standing or sitting. */
+  act: Act | null;
   /** Art pixels to raise the sprite so a sitter rests on the seat. */
   lift: number;
-  carry: "cup" | null;
+  carry: "cup" | "book" | null;
   /** Whether the monitor on its desk is on. */
   screenOn: boolean;
   emote: Emote | null;
@@ -760,7 +780,11 @@ export interface Presence {
   range: Rect | null;
 }
 
-/** An idle agent takes a break this long after it last did something, then goes back to its desk to sleep. */
+/**
+ * How long a break lasts. An idle agent rests this long after it last did
+ * something, then goes back to its desk to sleep; a finished one stays at the
+ * pantry this long, then goes back to stand at its desk until it is read.
+ */
 export const WANDER_MS = 15 * 60_000;
 /** How long somebody on a break stays at one spot before choosing another: between this ... */
 export const BREAK_DWELL_MIN_MS = 3 * 60_000;
@@ -794,15 +818,18 @@ export function breakStretch(agentId: string, now: number): { index: number; sta
 
 export interface Idler {
   agentId: string;
-  /** When it went idle, epoch ms. */
+  /** When it went idle, or finished, epoch ms. */
   since: number;
+  /** Finished agents gather at the pantry; idle ones rest in the lounge. Defaults to resting. */
+  purpose?: "rest" | "gather";
 }
 
 /**
- * Where everybody on a break in one room is. For each stretch of its break an
- * agent has its own order of preference over the room's use points, and takes
- * the first that was free when the stretch began: whoever was already
- * somewhere keeps it. So no two share a tile, nobody is unseated by a
+ * Where everybody on a break in one room is. An idle agent rests: for each
+ * stretch of its break it has its own order of preference, the lounge first.
+ * A finished agent gathers: the pantry's standing table first, then outwards
+ * from it. Each takes the first place that was free when its stretch began:
+ * whoever was already somewhere keeps it. So no two share a tile, nobody is unseated by a
  * newcomer, and nobody moves except when their own stretch ends. When the use
  * points are all taken the rest wait on the walkway, one tile each, and when
  * that is full too they are left out: they stay at their desks.
@@ -815,6 +842,12 @@ export function assignBreaks(room: Room, idlers: readonly Idler[], reserved: rea
     walkway.push({ x, y: room.lounge.walkway.y, aisleY: room.lounge.walkway.y, pose: "stand", facing: "down", lift: 0, prop: null, zone: "walkway" });
   }
   const key = (spot: Point) => `${spot.x},${spot.y}`;
+  // The table stands between the two zones; both its places belong with the pantry.
+  const pantry = spots.filter((spot) => spot.zone === "pantry" || spot.prop === "table");
+  const lounge = spots.filter((spot) => !pantry.includes(spot));
+  // Where people gather: the standing table, or failing that the middle of the pantry.
+  const table = room.zones.flatMap((zone) => zone.props).find((item) => item.id === "table");
+  const hub = table ? table.x : pantry.reduce((sum, spot) => sum + spot.x, 0) / Math.max(1, pantry.length);
   const blocked = new Set(reserved.map(key));
   const people = [...idlers].sort((a, b) => a.agentId.localeCompare(b.agentId));
 
@@ -839,12 +872,20 @@ export function assignBreaks(room: Room, idlers: readonly Idler[], reserved: rea
       const place = placeAt(other, theirs.at === mine.at ? mine.at : mine.at - 1);
       if (place) taken.add(key(place));
     }
-    const preference = (choices: readonly UseSpot[]) =>
+    const anyOf = (choices: readonly UseSpot[]) =>
       choices
         .map((spot, index) => ({ spot, rank: hash(`${idler.agentId}/${mine.index}/${index}`) }))
         .sort((a, b) => a.rank - b.rank)
         .map((entry) => entry.spot);
-    const choice = [...preference(spots), ...preference(walkway)].find((spot) => !taken.has(key(spot))) ?? null;
+    // Whoever has finished goes where the others are: the table first, then outwards from it, the
+    // same order for everybody, so they stand together and not spread along the wall.
+    const together = (choices: readonly UseSpot[]) =>
+      [...choices].sort((a, b) => Math.abs(a.x - hub) - Math.abs(b.x - hub) || b.y - a.y || a.x - b.x);
+    const order =
+      idler.purpose === "gather"
+        ? [...together(pantry), ...together(walkway.filter((spot) => Math.abs(spot.x - hub) <= 3)), ...anyOf(lounge), ...anyOf(walkway)]
+        : [...anyOf(lounge), ...anyOf(pantry), ...anyOf(walkway)];
+    const choice = order.find((spot) => !taken.has(key(spot))) ?? null;
     known.set(memo, choice);
     return choice;
   };
@@ -858,8 +899,10 @@ export function assignBreaks(room: Room, idlers: readonly Idler[], reserved: rea
 }
 
 /**
- * Where a character is and what it is doing. `breakSpot` is where an idle
- * agent's break takes it, from `assignBreaks`; without one it sleeps at its desk.
+ * Where a character is and what it is doing. `breakSpot` is where an idle or
+ * finished agent's break takes it, from `assignBreaks`; without one an idle
+ * agent sleeps at its desk and a finished one stands at it. `company` says
+ * somebody is standing across the table from it.
  */
 export function presenceOf(
   agent: PaseoAgent,
@@ -867,6 +910,7 @@ export function presenceOf(
   desk: Desk,
   breakSpot: UseSpot | null,
   now: number,
+  company = false,
 ): Presence {
   const base = {
     agentId: agent.id,
@@ -877,7 +921,9 @@ export function presenceOf(
     lounging: false,
     lift: 0,
     carry: null,
+    act: null,
   };
+  const away = breakSpot && onBreak(agent, now) ? breakSpot : null;
   switch (state) {
     case "working":
       return { ...base, activity: "typing", at: desk.seat, facing: "up", seated: true, screenOn: true, emote: null };
@@ -885,25 +931,60 @@ export function presenceOf(
       return { ...base, activity: "asking", at: desk.stand, facing: "down", seated: false, screenOn: true, emote: "question" };
     case "failed":
       return { ...base, activity: "stuck", at: desk.seat, facing: "down", seated: true, screenOn: true, emote: "alert" };
-    case "ready":
-      return { ...base, activity: "done", at: desk.stand, facing: "down", seated: false, screenOn: true, emote: "check" };
+    case "ready": {
+      if (!away) {
+        return { ...base, activity: "done", at: desk.stand, facing: "down", seated: false, screenOn: true, emote: "check" };
+      }
+      // It keeps its check wherever it goes, and its screen stays lit: there is something to read.
+      const atTable = away.prop === "table";
+      const sitting = away.pose === "sit";
+      return {
+        ...base,
+        activity: "gathering",
+        at: { x: away.x, y: away.y },
+        aisleY: away.aisleY,
+        // At the table it faces whoever is opposite; anywhere else it turns to the room, cup in hand.
+        facing: atTable || sitting ? away.facing : "down",
+        seated: false,
+        lounging: sitting,
+        lift: away.lift,
+        act: sitting ? null : atTable && company ? "talk" : "drink",
+        screenOn: true,
+        emote: "check",
+      };
+    }
     case "closed":
       return { ...base, activity: "away", at: desk.seat, facing: "up", visible: false, seated: false, screenOn: false, emote: null };
     case "idle": {
-      if (!breakSpot || !onBreak(agent, now)) {
+      if (!away) {
         return { ...base, activity: "asleep", at: desk.seat, facing: "up", seated: true, screenOn: false, emote: "zzz" };
       }
+      const whim = hash(`${agent.id}/${breakStretch(agent.id, now).index}/whim`) % 3;
+      const sitting = away.pose === "sit";
+      const act: Act | null = sitting
+        ? away.prop === "beanbag" || whim === 1
+          ? "doze"
+          : whim === 2
+            ? "read"
+            : null
+        : away.prop === "table"
+          ? company
+            ? "talk"
+            : "drink"
+          : away.zone === "walkway"
+            ? "stretch"
+            : null;
       return {
         ...base,
         activity: "wandering",
-        at: { x: breakSpot.x, y: breakSpot.y },
-        aisleY: breakSpot.aisleY,
-        facing: breakSpot.facing,
+        at: { x: away.x, y: away.y },
+        aisleY: away.aisleY,
+        facing: away.facing,
         seated: false,
-        lounging: breakSpot.pose === "sit",
-        lift: breakSpot.lift,
-        // A cup for whoever stands about with nothing in front of them: at the table, or waiting on the walkway.
-        carry: breakSpot.prop === "table" || breakSpot.zone === "walkway" ? "cup" : null,
+        lounging: sitting,
+        lift: away.lift,
+        carry: act === "read" ? "book" : null,
+        act,
         screenOn: false,
         emote: null,
       };
@@ -930,9 +1011,12 @@ export function presences(
     if (!agent) continue;
     const state = stateOf(agent);
     states.set(agentId, state);
-    if (state !== "idle" || !onBreak(agent, now)) continue;
+    if ((state !== "idle" && state !== "ready") || !onBreak(agent, now)) continue;
     const roomId = office.roomOf.get(agentId) ?? "";
-    idlers.set(roomId, [...(idlers.get(roomId) ?? []), { agentId, since: Date.parse(activityAt(agent)) }]);
+    idlers.set(roomId, [
+      ...(idlers.get(roomId) ?? []),
+      { agentId, since: Date.parse(activityAt(agent)), purpose: state === "ready" ? "gather" : "rest" },
+    ]);
   }
   const breaks = new Map<string, UseSpot>();
   for (const room of office.rooms) {
@@ -940,12 +1024,17 @@ export function presences(
     const assigned = assignBreaks(room, idlers.get(room.workspaceId) ?? [], guests.map((guest) => guest.at), now);
     for (const [agentId, spot] of assigned) breaks.set(agentId, spot);
   }
+  const occupied = new Set([...breaks.values()].map((spot) => `${spot.x},${spot.y}`));
   const out = new Map<string, Presence>();
   for (const [agentId, desk] of office.desks) {
     const agent = agents.get(agentId);
     const state = states.get(agentId);
     if (!agent || !state) continue;
-    out.set(agentId, presenceOf(agent, state, desk, breaks.get(agentId) ?? null, now));
+    const spot = breaks.get(agentId) ?? null;
+    // The table's two places are a tile either side of it: somebody opposite is two tiles along.
+    const company =
+      spot?.prop === "table" && occupied.has(`${spot.x + (spot.facing === "right" ? 2 : -2)},${spot.y}`);
+    out.set(agentId, presenceOf(agent, state, desk, spot, now, company));
   }
   for (const [agentId, visitor] of office.visitors) {
     const agent = agents.get(agentId);
@@ -963,6 +1052,7 @@ export function presences(
       lounging: false,
       lift: 0,
       carry: null,
+      act: null,
       screenOn: false,
       emote: state === "needs-input" ? "question" : state === "failed" ? "alert" : state === "ready" ? "check" : null,
       range: null,

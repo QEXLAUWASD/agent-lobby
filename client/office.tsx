@@ -19,6 +19,7 @@ import {
   CHARACTER_HEIGHT,
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
+  actFrame,
   bubbleTrack,
   characterLabel,
   linkBetween,
@@ -37,6 +38,7 @@ import {
   type Standing,
 } from "./scene-model";
 import {
+  ArchiveSprite,
   BubbleSprite,
   ChairSprite,
   CharacterSprite,
@@ -99,12 +101,20 @@ const POSE: Record<Presence["activity"], CharacterPose> = {
   stuck: "sit",
   done: "stand",
   wandering: "stand",
+  gathering: "stand",
   asleep: "sleep",
   away: "sit",
   visiting: "stand",
 };
 
 type Places = Record<Spot, Place>;
+
+/** A number that is the agent's own, even or odd by which way it faces, so that two at a table alternate. */
+function seedOf(agentId: string, facing: Presence["facing"]): number {
+  let sum = 0;
+  for (let index = 0; index < agentId.length; index += 1) sum += agentId.charCodeAt(index);
+  return (sum & ~1) + (facing === "right" ? 0 : 1);
+}
 
 interface CharacterProps {
   theme: PluginTheme;
@@ -276,8 +286,17 @@ const Character = memo(
       // `places` is read through `placesKey`.
     }, [agent.id, breakKey, corridorX, entered, leaving, placesKey, position, reduced, seatKey, spot, tile]);
 
-    const pose: CharacterPose = walking ? "walk" : presence.lounging ? "sit" : POSE[activity];
-    const frame = useFrame(reduced ? "off" : walking ? "walk" : pose === "type" ? "slow" : "off");
+    const act = walking ? null : presence.act;
+    const pose: CharacterPose = walking
+      ? "walk"
+      : act && act !== "read"
+        ? act
+        : presence.lounging
+          ? "sit"
+          : POSE[activity];
+    const beat = useFrame(reduced ? "off" : walking ? "walk" : pose === "type" || (act && act !== "read") ? "slow" : "off");
+    // People across a table take turns: whoever faces right speaks on the even beats.
+    const frame = act && !reduced ? actFrame(act, beat, seedOf(agent.id, presence.facing)) : beat;
     const emoteFrame = useFrame(!reduced && presence.emote !== null && walking === null ? "slow" : "off");
     const height = tile * CHARACTER_HEIGHT;
     // The pressable itself is at least 44 px each way: a visitor or a wanderer has no desk cell behind it.
@@ -378,6 +397,7 @@ const Character = memo(
     before.presence.emote === after.presence.emote &&
     before.presence.facing === after.presence.facing &&
     before.presence.lounging === after.presence.lounging &&
+    before.presence.act === after.presence.act &&
     before.presence.carry === after.presence.carry &&
     before.presence.lift === after.presence.lift &&
     before.presence.seated === after.presence.seated,
@@ -401,7 +421,7 @@ interface DeskProps {
 const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, selected, dimmed, onPress }: DeskProps) {
   const { agent, state } = node;
   const vacant = !presence?.visible;
-  const elsewhere = presence?.activity === "wandering";
+  const elsewhere = presence?.activity === "wandering" || presence?.activity === "gathering";
   const speaks = vacant || elsewhere;
   const screen = state === "failed" ? "error" : presence?.screenOn ? "on" : "off";
   const color = stateColor(theme, state);
@@ -510,7 +530,7 @@ const SpeechBubble = memo(function SpeechBubble({
     [bubble.text, bubble.tone, bubble.status],
   );
   const available = officeWidth - 4;
-  const { width, height } = bubbleSize(art, tile, available);
+  const { width, height } = bubbleSize(art, available);
   const track = useMemo(() => bubbleTrack(width, height, tile, officeWidth), [width, height, tile, officeWidth]);
   // Where the speaker's head is under the bubble once the bubble has been kept inside the office.
   const centre = (home.x + 0.5) * tile;
@@ -543,7 +563,7 @@ const SpeechBubble = memo(function SpeechBubble({
         ],
       }}
     >
-      <BubbleSprite theme={theme} tile={tile} art={art} availablePx={available} tail={centre - left} />
+      <BubbleSprite theme={theme} art={art} availablePx={available} tail={centre - left} />
     </Animated.View>
   );
 });
@@ -712,38 +732,31 @@ const ClosedFixture = memo(function ClosedFixture({
 }) {
   const closed = room.closed;
   if (!closed) return null;
-  const { colors } = theme;
   const count = closed.ids.length;
   const found = matching !== null && matching > 0;
-  const slop = touchSlop(Math.min(tile, 18));
+  // The cabinet rises a tile above its own; the target covers both, and is padded out to 44 px.
+  const slop = touchSlop(tile);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${count} closed ${count === 1 ? "agent" : "agents"} in ${room.name}${found ? `, ${matching} matching` : ""}. Opens the list.`}
-      hitSlop={{ top: slop, bottom: slop, left: 4, right: 4 }}
+      hitSlop={{ top: slop, bottom: slop, left: slop, right: slop }}
       onPress={() => onPress(room.workspaceId)}
       style={{
         position: "absolute",
         left: closed.at.x * tile,
-        top: closed.at.y * tile,
-        width: 2 * tile - 2,
-        height: Math.max(14, Math.min(tile, 18)),
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: found ? colors.accent : colors.border,
-        backgroundColor: colors.surface1,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 2,
+        top: (closed.at.y - 1) * tile,
+        width: tile,
+        height: 2 * tile,
+        justifyContent: "flex-end",
+        borderRadius: 3,
+        borderWidth: found ? 1 : 0,
+        borderColor: theme.colors.accent,
         opacity: dimmed ? DIMMED : 1,
-        zIndex: 1,
+        zIndex: closed.at.y,
       }}
     >
-      <Icon name="Archive" size={9} color={colors.foregroundMuted} />
-      <Text numberOfLines={1} style={{ color: found ? colors.foreground : colors.foregroundMuted, fontSize: 10 }}>
-        {found ? `${matching}/${count}` : count}
-      </Text>
+      <ArchiveSprite theme={theme} tile={tile} count={count} label={found ? `${matching}/${count}` : String(count)} />
     </Pressable>
   );
 });
@@ -855,7 +868,8 @@ export function OfficeScene({
       const presence = presences.get(agentId);
       if (!presence) return;
       // On a break it is wherever the break took it; otherwise this spot is only somewhere to have come from.
-      const away = presence.activity === "wandering" || presence.activity === "visiting";
+      const away =
+        presence.activity === "wandering" || presence.activity === "gathering" || presence.activity === "visiting";
       const home = spot ?? (away ? presence.at : { x: room.lounge.walkway.x + 1, y: room.lounge.walkway.y });
       const lounge: Place = { at: home, aisleY: away ? presence.aisleY : home.y };
       const places: Places = {

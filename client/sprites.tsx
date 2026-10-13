@@ -3,8 +3,11 @@ import { memo, useMemo } from "react";
 import { View } from "react-native";
 import type { Emote, Room } from "./office-model";
 import {
-  BUBBLE_HEIGHT,
   BUBBLE_MAX_WIDTH,
+  archiveLevel,
+  bubbleSize as artBubbleSize,
+  deviceBubbleScale,
+  tag,
   Sprite,
   anchored,
   deviceCrispScale,
@@ -12,7 +15,6 @@ import {
   door,
   wallTopAt,
   bubble,
-  bubbleWidth,
   character,
   composite,
   emote,
@@ -52,7 +54,15 @@ export type CharacterPose =
   /** On its feet, still. */
   | "stand"
   /** Mid-step. */
-  | "walk";
+  | "walk"
+  /** Standing with a cup; the second frame lifts it. */
+  | "drink"
+  /** Standing, talking; the second frame opens the mouth and lifts a hand. */
+  | "talk"
+  /** Standing; the second frame has both arms up. */
+  | "stretch"
+  /** Seated, eyes shut, nodding. */
+  | "doze";
 
 export type ScreenState = "on" | "off" | "error";
 
@@ -90,6 +100,14 @@ function pose(wanted: CharacterPose, heading: Heading): { pose: ArtPose; facing:
       return { pose: "idle", facing: heading };
     case "walk":
       return { pose: "walk", facing: heading };
+    case "drink":
+    case "talk":
+      // Drawn from the front and the sides; seen from behind it just stands.
+      return heading === "up" ? { pose: "idle", facing: "up" } : { pose: wanted, facing: heading };
+    case "stretch":
+      return { pose: "stretch", facing: heading === "up" ? "up" : "down" };
+    case "doze":
+      return { pose: "doze", facing: "down" };
   }
 }
 
@@ -111,7 +129,7 @@ export const CharacterSprite = memo(function CharacterSprite({
   heading: Heading;
   /** A running counter; it wraps at the pose's own frame count. 0 is the still. */
   frame: number;
-  carry?: "cup" | null;
+  carry?: "cup" | "book" | null;
   /** Art pixels to raise it, so a sitter rests on a seat. */
   lift?: number;
 }) {
@@ -201,18 +219,25 @@ export interface BubbleArt {
   status?: "running" | "completed" | "failed" | "canceled";
 }
 
-/** The most a bubble may take of a width of `availablePx`, in art pixels. */
-function bubbleMaxWidth(tile: number, availablePx: number): number {
-  return Math.max(24, Math.min(BUBBLE_MAX_WIDTH, Math.floor(availablePx / artScale(tile))));
+/**
+ * Bubbles and count plates are drawn at a scale of their own, so that their
+ * words stay readable however small the room is.
+ */
+const textScale = () => deviceBubbleScale();
+
+/** The most a bubble may take of a width of `availablePx`, in its own art pixels. */
+function bubbleMaxWidth(availablePx: number): number {
+  return Math.max(24, Math.min(BUBBLE_MAX_WIDTH, Math.floor((availablePx - 8) / textScale())));
 }
 
-/** A bubble's size in layout pixels, without drawing it. The catalogue folds and cuts the text. */
-export function bubbleSize(art: BubbleArt, tile: number, availablePx: number): { width: number; height: number } {
-  const scale = artScale(tile);
-  return {
-    width: bubbleWidth({ ...art, maxWidth: bubbleMaxWidth(tile, availablePx) }) * scale,
-    height: BUBBLE_HEIGHT * scale,
-  };
+/**
+ * A bubble's size in layout pixels, without drawing it. The catalogue folds
+ * the text to its font, wraps it to at most three lines and cuts the rest.
+ */
+export function bubbleSize(art: BubbleArt, availablePx: number): { width: number; height: number } {
+  const scale = textScale();
+  const size = artBubbleSize({ ...art, maxWidth: bubbleMaxWidth(availablePx) });
+  return { width: size.width * scale, height: size.height * scale };
 }
 
 /**
@@ -222,14 +247,42 @@ export function bubbleSize(art: BubbleArt, tile: number, availablePx: number): {
  */
 export const BubbleSprite = memo(function BubbleSprite({
   theme,
-  tile,
   art,
   availablePx,
   tail,
-}: SpriteProps & { art: BubbleArt; availablePx: number; tail: number }) {
-  const scale = artScale(tile);
-  const bitmap = bubble({ ...art, maxWidth: bubbleMaxWidth(tile, availablePx), tailX: Math.round(tail / scale) });
+}: Pick<SpriteProps, "theme"> & { art: BubbleArt; availablePx: number; tail: number }) {
+  const scale = textScale();
+  const bitmap = bubble({ ...art, maxWidth: bubbleMaxWidth(availablePx), tailX: Math.round(tail / scale) });
   return <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} />;
+});
+
+/**
+ * The filing cabinet a room keeps its closed agents in, one tile wide and
+ * standing on the bottom of the box it is given, with the count on a plate
+ * above it. Fuller drawers for more of them.
+ */
+export const ArchiveSprite = memo(function ArchiveSprite({
+  theme,
+  tile,
+  count,
+  label,
+}: SpriteProps & { count: number; label: string }) {
+  const scale = artScale(tile);
+  const cabinet = prop("archive", { level: archiveLevel(count) });
+  const plate = tag(label);
+  const plateScale = textScale();
+  const top = tile - cabinet.height * scale;
+  return (
+    <View style={{ width: tile, height: tile }}>
+      <Sprite sprite={cabinet} palette={officePalette(theme)} scale={scale} style={anchored(cabinet, scale, tile / 2, tile)} />
+      <Sprite
+        sprite={plate}
+        palette={officePalette(theme)}
+        scale={plateScale}
+        style={anchored(plate, plateScale, tile / 2, deviceSnap(top - 1))}
+      />
+    </View>
+  );
 });
 
 /** What a room's drawing depends on: its shape and furniture, not where it stands. */

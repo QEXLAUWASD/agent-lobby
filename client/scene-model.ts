@@ -1,7 +1,7 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import type { Exchange } from "./exchanges";
 import { STATE_LABEL, displayTitle, matches, roleOf, type CrewNode, type CrewState } from "./model";
-import type { Office, Point, Presence } from "./office-model";
+import type { Act, Office, Point, Presence } from "./office-model";
 
 /**
  * Everything the scene decides that is not drawing: how big a tile is, how a
@@ -251,9 +251,31 @@ const SPOT: Record<Presence["activity"], Spot> = {
   asking: "stand",
   done: "stand",
   wandering: "lounge",
+  gathering: "lounge",
   visiting: "lounge",
   away: "out",
 };
+
+/**
+ * Which frame of what it is doing a character shows on the scene's `beat`
+ * (one every 280 ms). Frame 0 is the rest pose, held most of the time: a sip
+ * now and then, a stretch now and then, a slow nod. Two people talking take
+ * turns: `seed` is even for one and odd for the other.
+ */
+export function actFrame(act: Act, beat: number, seed: number): 0 | 1 {
+  switch (act) {
+    case "drink":
+      return (beat + seed * 3) % 10 < 2 ? 1 : 0;
+    case "stretch":
+      return (beat + seed * 5) % 14 < 4 ? 1 : 0;
+    case "talk":
+      return ((beat >> 1) + seed) % 2 === 0 ? 1 : 0;
+    case "doze":
+      return ((beat >> 2) + seed) % 2 === 0 ? 1 : 0;
+    case "read":
+      return 0;
+  }
+}
 
 /** The spot an activity is done at. */
 export function spotOf(activity: Presence["activity"]): Spot {

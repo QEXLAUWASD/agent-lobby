@@ -56,6 +56,9 @@ export function firstLine(text: string, max = BUBBLE_MAX_CHARS): string {
   let line = "";
   for (const candidate of text.split(/\r?\n/)) {
     const cleaned = candidate
+      // An image says nothing in a bubble; a link says its words.
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
       .replace(/^[\s#>*\-`]+/, "")
       .replace(/\s+/g, " ")
       .trim();

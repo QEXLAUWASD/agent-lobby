@@ -48,6 +48,9 @@ describe("firstLine", () => {
     expect(firstLine("\n\n## Plan\nsecond")).toBe("Plan");
     expect(firstLine("- [x]   done   now")).toBe("[x] done now");
     expect(firstLine("   \n\t\n")).toBe("");
+    // An image line says nothing; a link says its words.
+    expect(firstLine("![Image](file:///var/folders/x/shot.png)\nThe panel renders.")).toBe("The panel renders.");
+    expect(firstLine("See [the README](https://example.com/readme) first")).toBe("See the README first");
   });
 
   it("truncates on code points, not in the middle of one", () => {

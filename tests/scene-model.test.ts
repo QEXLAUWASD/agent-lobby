@@ -5,6 +5,7 @@ import { layoutOffice } from "../client/office-model";
 import {
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
+  actFrame,
   bubbleTrack,
   characterLabel,
   highlighted,
@@ -295,8 +296,30 @@ describe("bubbleTrack and spotOf", () => {
   it("puts each activity at its spot", () => {
     expect((["typing", "stuck", "asleep"] as const).map(spotOf)).toEqual(["seat", "seat", "seat"]);
     expect((["asking", "done"] as const).map(spotOf)).toEqual(["stand", "stand"]);
-    expect((["wandering", "visiting"] as const).map(spotOf)).toEqual(["lounge", "lounge"]);
+    expect((["wandering", "gathering", "visiting"] as const).map(spotOf)).toEqual(["lounge", "lounge", "lounge"]);
     expect(spotOf("away")).toBe("out");
+  });
+});
+
+describe("actFrame", () => {
+  const beats = (act: Parameters<typeof actFrame>[0], seed: number) => Array.from({ length: 40 }, (_, beat) => actFrame(act, beat, seed));
+
+  it("holds the rest pose most of the time and moves now and then", () => {
+    for (const act of ["drink", "stretch"] as const) {
+      const frames = beats(act, 3);
+      const moving = frames.filter((frame) => frame === 1).length;
+      expect(moving).toBeGreaterThan(0);
+      expect(moving).toBeLessThan(frames.length / 2);
+    }
+    expect(new Set(beats("read", 1))).toEqual(new Set([0]));
+    // People do not all sip on the same beat.
+    expect(beats("drink", 1)).not.toEqual(beats("drink", 2));
+  });
+
+  it("gives two people at a table their turns", () => {
+    const one = beats("talk", 10);
+    const other = beats("talk", 11);
+    for (let beat = 0; beat < one.length; beat += 1) expect(one[beat]).not.toBe(other[beat]);
   });
 });
 

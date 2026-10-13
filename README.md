@@ -20,9 +20,9 @@ Two surfaces share one component:
 | Working | seated, typing, screen lit |
 | Needs you | standing by the desk with a `?` |
 | Failed | at the desk, error screen, a cross |
-| Ready | standing by the desk with a check |
-| Idle | on a break for 15 minutes (at the pantry, the shelves or the sofa, moving on every few minutes), then asleep at the desk |
-| Closed | no desk: it walks out, and the room's plate on the top wall counts it |
+| Ready | at the pantry with the others who have finished, check over its head, its screen left on; after 15 minutes, standing at its desk |
+| Idle | resting for 15 minutes (on the sofa, dozing or with a book, at the shelves, stretching), then asleep at the desk |
+| Closed | no desk: it walks out, and the room's filing cabinet counts it |
 
 The `ghostline/role` label picks the outline: a hat and cape for an Overseer, a headset for a Nexus,
 cat ears and a tail for a Meow. Labels are display only; the plugin grants nothing.
@@ -35,10 +35,10 @@ A seat comes from who an agent's parent is and when it was created, never from w
 so nobody moves when somebody else starts, finishes or arrives. The one thing that frees a desk is
 closing: the agent walks out, and only then do the teammates seated after it walk one desk up. A
 room is as large as what it holds, with each team of a crew on a floor of its own and the pantry and
-lounge beside the desks where the pane is wide enough, under them where it is not. Pressing the
-plate on a room's top wall lists its closed agents, each with what can still be done with it.
-Search and the state chips dim everyone who does not match, in place, and mark the plate of a room
-with a closed agent that matches.
+lounge beside the desks where the pane is wide enough, under them where it is not. Pressing a
+room's filing cabinet lists its closed agents, each with what can still be done with it. Search and
+the state chips dim everyone who does not match, in place, and mark the cabinet of a room with a
+closed agent that matches.
 
 Characters walk. When an agent starts work, finishes, goes on a break or closes, its character
 walks there at one pace along the aisle and the room's corridor; a new agent walks in from the door
@@ -48,8 +48,8 @@ simply placed.
 
 A message from one agent to another shows as a pixel bubble over the sender and an envelope that
 travels to the recipient's desk. A working agent's bubble says what its tool does in a word (`Bash`,
-`Read`, `Edit`, `Find`, `Web`, `Msg`, `Agent`, `Plan`), or the start of what it is saying; a screen
-reader gets the full line. Under reduced motion nothing walks or travels: characters stand where
+`Read`, `Edit`, `Find`, `Web`, `Msg`, `Agent`, `Plan`), or the start of what it is saying, on up to
+three short lines; a screen reader gets the full line. Under reduced motion nothing walks or travels: characters stand where
 they belong and a line joins sender and recipient.
 
 Selecting a character, or an empty desk, shows the workspace, directory, last error and pending

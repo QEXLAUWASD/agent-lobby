@@ -302,7 +302,7 @@ describe("closed agents", () => {
     list.map((entry) => (ids.includes(entry.id) ? ({ ...entry, status: "closed" } as PaseoAgent) : entry));
   const keys = (layout: Office) => Object.fromEntries([...layout.desks].map(([id, desk]) => [id, desk.seatKey]));
 
-  it("have no desk: the room lists them, oldest first, on a fixture on its top wall", () => {
+  it("have no desk: the room lists them, oldest first, at a cabinet of its own", () => {
     const layout = office(closed(crew(), "meow-b", "solo-1"), 40);
     const room = layout.rooms[0];
     if (!room) throw new Error("fixture");
@@ -311,10 +311,17 @@ describe("closed agents", () => {
     expect(layout.desks.size).toBe(5);
     expect(room.agentCount).toBe(5);
     expect(room.closed?.ids).toEqual(["solo-1", "meow-b"]);
-    expect(room.closed?.at.y).toBe(room.y);
-    expect(room.closed && room.closed.at.x + 2).toBe(room.x + room.width - 1);
-    // The plate stops short of it.
-    expect(room.header.x + room.header.width).toBeLessThanOrEqual(room.closed?.at.x ?? 0);
+    // Their cabinet stands on a tile of its own, against the wall at the end of the zones.
+    const at = room.closed?.at ?? { x: -1, y: -1 };
+    expect(inside({ ...at, width: 1, height: 1 }, room)).toBe(true);
+    expect(room.lounge.wall && inside({ ...at, width: 1, height: 1 }, room.lounge.wall)).toBe(true);
+    const occupied = [
+      ...room.zones.flatMap((zone) => zone.props.map((item) => `${item.x},${item.y}`)),
+      ...room.zones.flatMap((zone) => zone.spots.map((spot) => `${spot.x},${spot.y}`)),
+      ...[...layout.desks.values()].map((desk) => `${desk.cell.x},${desk.cell.y}`),
+    ];
+    expect(occupied).not.toContain(`${at.x},${at.y}`);
+    expect(at.x).toBeLessThan(room.x + room.width - 1);
     // They still belong to the room.
     expect(layout.roomOf.get("meow-b")).toBe(room.workspaceId);
     expect(office(crew(), 40).rooms[0]?.closed).toBeNull();
@@ -507,6 +514,8 @@ describe("zones", () => {
         expect(Number(key.split(",")[0])).toBeGreaterThan(room.corridorX);
       }
       expect(spots.some((spot) => spot.pose === "sit")).toBe(true);
+      // Whole tiles only: nobody is put lying across a sofa that seats two.
+      expect(spots.every((spot) => Number.isInteger(spot.x))).toBe(true);
       expect(room.zones.flatMap((zone) => zone.props).some((item) => item.id === "rug")).toBe(true);
     }
   });
@@ -547,7 +556,7 @@ describe("assignBreaks", () => {
   });
 
   it("moves people on between stretches, not all at the same moment", () => {
-    const people = idlers(5);
+    const people = idlers(3);
     const places = (at: number) => assignBreaks(room, people, [], at);
     const moves = new Map<string, number[]>();
     let previous = places(now);
@@ -591,6 +600,26 @@ describe("assignBreaks", () => {
     expect([...out.values()].some((spot) => spot.x === tile.x && spot.y === tile.y)).toBe(false);
   });
 
+  it("gathers the finished at the table and outwards from it, and rests the idle in the lounge", () => {
+    const table = room.zones.flatMap((zone) => zone.props).find((item) => item.id === "table");
+    if (!table) throw new Error("fixture");
+    const finished = Array.from({ length: 4 }, (_, index) => ({ agentId: `done-${index}`, since: now - 60_000 - index, purpose: "gather" as const }));
+    const out = assignBreaks(room, [...finished, ...idlers(3)], [], now);
+    const places = finished.map((entry) => out.get(entry.agentId));
+    // Both places at the table are taken, and everybody is within three tiles of it.
+    expect(places.filter((spot) => spot?.prop === "table")).toHaveLength(2);
+    for (const spot of places) expect(Math.abs((spot?.x ?? 99) - table.x)).toBeLessThanOrEqual(3);
+    for (const spot of places) expect(spot?.zone === "pantry" || spot?.prop === "table").toBe(true);
+    for (const idler of idlers(3)) {
+      expect(out.get(idler.agentId)?.zone).toBe("lounge");
+      expect(out.get(idler.agentId)?.prop).not.toBe("table");
+    }
+    expect(new Set([...out.values()].map((spot) => `${spot.x},${spot.y}`)).size).toBe(7);
+    // The same again a minute later: nobody at the pantry has moved.
+    const later = assignBreaks(room, [...finished, ...idlers(3)], [], now + 60_000);
+    for (const entry of finished) expect(later.get(entry.agentId)).toEqual(out.get(entry.agentId));
+  });
+
   it("does not unseat anyone when somebody else goes idle later", () => {
     const first = assignBreaks(room, idlers(4), [], now);
     const later = assignBreaks(room, [...idlers(4), { agentId: "latecomer", since: now - 1_000 }], [], now);
@@ -616,7 +645,7 @@ describe("presenceOf", () => {
     expect(at("working")).toMatchObject({ activity: "typing", at: desk.seat, facing: "up", seated: true, screenOn: true, emote: null, visible: true });
     expect(at("needs-input")).toMatchObject({ activity: "asking", at: desk.stand, facing: "down", seated: false, emote: "question" });
     expect(at("failed")).toMatchObject({ activity: "stuck", at: desk.seat, seated: true, emote: "alert" });
-    expect(at("ready")).toMatchObject({ activity: "done", at: desk.stand, seated: false, emote: "check" });
+    expect(presenceOf(subject, "ready", desk, null, now)).toMatchObject({ activity: "done", at: desk.stand, seated: false, emote: "check" });
     expect(at("closed")).toMatchObject({ activity: "away", visible: false, screenOn: false, emote: null });
   });
 
@@ -632,7 +661,34 @@ describe("presenceOf", () => {
       screenOn: false,
       carry: null,
     });
-    expect(at("idle", subject, table)).toMatchObject({ lounging: false, carry: "cup", facing: table.facing, lift: 0 });
+    expect(at("idle", subject, table)).toMatchObject({ lounging: false, act: "drink", facing: table.facing, lift: 0 });
+    expect(presenceOf(subject, "idle", desk, table, now, true).act).toBe("talk");
+    const walkway = { x: room.lounge.walkway.x + 3, y: room.lounge.walkway.y, aisleY: room.lounge.walkway.y, pose: "stand" as const, facing: "down" as const, lift: 0, prop: null, zone: "walkway" as const };
+    expect(at("idle", subject, walkway).act).toBe("stretch");
+    // What somebody does on the sofa is theirs for the stretch: sitting, dozing or reading a book.
+    const onSofa = new Set(Array.from({ length: 40 }, (_, index) => at("idle", { ...subject, id: `sitter-${index}` } as PaseoAgent).act));
+    expect([...onSofa].sort()).toEqual([null, "doze", "read"].sort());
+    expect(at("idle", { ...subject, id: "sitter-0" } as PaseoAgent)).toEqual(at("idle", { ...subject, id: "sitter-0" } as PaseoAgent));
+  });
+
+  it("takes a finished agent to the pantry with its check, its screen left on, until the break is over", () => {
+    const counter = room.zones.flatMap((zone) => zone.spots).find((spot) => spot.zone === "pantry" && spot.prop !== "table");
+    if (!counter) throw new Error("fixture");
+    expect(at("ready", subject, table)).toMatchObject({
+      activity: "gathering",
+      at: { x: table.x, y: table.y },
+      emote: "check",
+      screenOn: true,
+      act: "drink",
+      facing: table.facing,
+    });
+    expect(presenceOf(subject, "ready", desk, table, now, true).act).toBe("talk");
+    // In front of an appliance it turns to the room, cup in hand.
+    expect(at("ready", subject, counter)).toMatchObject({ activity: "gathering", facing: "down", act: "drink" });
+    expect(at("ready", subject, sofa)).toMatchObject({ activity: "gathering", lounging: true, act: null, emote: "check" });
+    const stale = { ...subject, updatedAt: new Date(now - WANDER_MS).toISOString() } as PaseoAgent;
+    expect(at("ready", stale, table)).toMatchObject({ activity: "done", at: desk.stand, emote: "check" });
+    for (const state of ["needs-input", "failed", "working"] as const) expect(at(state, subject, table).at).not.toEqual({ x: table.x, y: table.y });
   });
 
   it("sends a long-idle agent, or one with nowhere to go, to sleep at its desk", () => {
