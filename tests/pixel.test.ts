@@ -22,7 +22,7 @@ import {
 } from "../client/pixel/bubble";
 import { contrast, luminance, mix, parseColor } from "../client/pixel/color";
 import { EMOTE_FRAMES, EMOTE_SIZE, emote, type EmoteId } from "../client/pixel/emotes";
-import { ELLIPSIS, FALLBACK, FONT_HEIGHT, GLYPH_CHARS, ICON, glyph } from "../client/pixel/font";
+import { ELLIPSIS, FACES, FALLBACK, FONT_HEIGHT, GLYPH_CHARS, ICON, glyph } from "../client/pixel/font";
 import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "../client/pixel/grid";
 import { Lru } from "../client/pixel/lru";
 import { SLOTS, lookFor, officePalette, paletteColor, slotIndex } from "../client/pixel/palette";
@@ -634,22 +634,36 @@ describe("cache bounds", () => {
 });
 
 describe("font and text", () => {
-  it("draws every glyph as a clean grid inside the line", () => {
-    const shapes = new Map<string, string>();
-    for (const char of GLYPH_CHARS) {
-      const { width, rows } = glyph(char);
-      expect(width, char).toBeGreaterThan(0);
-      expect(rows.length, char).toBeGreaterThanOrEqual(7);
-      expect(rows.length, char).toBeLessThanOrEqual(FONT_HEIGHT);
-      for (const line of rows) expect(line, char).toMatch(new RegExp(`^[#.]{${width}}$`));
-      if (char !== " ") expect(rows.join("").includes("#"), char).toBe(true);
-      const shape = rows.join("/").replace(/(\/\.+)+$/, "");
-      expect(shapes.get(shape), `${char} looks like ${shapes.get(shape)}`).toBeUndefined();
-      shapes.set(shape, char);
+  it("draws every glyph of both faces as a clean grid inside the line", () => {
+    for (const face of ["regular", "small"] as const) {
+      const { ascent, height, glyphs } = FACES[face];
+      expect(Object.keys(glyphs).sort()).toEqual([...GLYPH_CHARS].sort());
+      const shapes = new Map<string, string>();
+      for (const char of GLYPH_CHARS) {
+        const { width, rows } = glyph(char, face);
+        expect(width, `${face} ${char}`).toBeGreaterThan(0);
+        expect(rows.length, `${face} ${char}`).toBeGreaterThanOrEqual(ascent);
+        expect(rows.length, `${face} ${char}`).toBeLessThanOrEqual(height);
+        for (const line of rows) expect(line, `${face} ${char}`).toMatch(new RegExp(`^[#.]{${width}}$`));
+        if (char !== " ") expect(rows.join("").includes("#"), `${face} ${char}`).toBe(true);
+        const shape = rows.join("/").replace(/(\/\.+)+$/, "");
+        expect(shapes.get(shape), `${face}: ${char} looks like ${shapes.get(shape)}`).toBeUndefined();
+        shapes.set(shape, char);
+      }
     }
+    expect([FONT_HEIGHT, FACES.small.height]).toEqual([9, 6]);
     for (const char of "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:;!?-_+=/()[]<>'\"#@&%*") {
       expect(GLYPH_CHARS, char).toContain(char);
     }
+  });
+
+  it("measures and wraps in the face asked for", () => {
+    expect(textWidth("Bash", "small")).toBe(15);
+    expect(textWidth("Bash", "small")).toBeLessThan(textWidth("Bash"));
+    const text = "Đang kiểm tra hiện trạng của hệ thống";
+    for (const line of wrapText(text, 56, 3, "small")) expect(textWidth(line, "small")).toBeLessThanOrEqual(56);
+    expect(wrapText(text, 56, 9, "small").length).toBeLessThan(wrapText(text, 56, 9).length);
+    expect(textWidth(fitText(text, 40, "small"), "small")).toBeLessThanOrEqual(40);
   });
 
   it("folds Vietnamese and other accents to base letters", () => {
@@ -736,55 +750,65 @@ describe("wrapping", () => {
 
 describe("bubbles", () => {
   const TONES: BubbleTone[] = ["say", "tool", "tell", "ask", "alert"];
+  const FACE_NAMES = ["small", "regular"] as const;
   const row = (bitmap: Bitmap, y: number) => [...bitmap.pixels.slice(y * bitmap.width, (y + 1) * bitmap.width)];
+  const LONG = "Xong rồi, đã sửa lỗi ở cổng thanh toán và chạy lại toàn bộ kiểm thử";
 
-  it("is the size bubbleSize says, anchored at the tail", () => {
-    for (const tone of TONES) {
-      for (const text of ["", "ok", "Bash", "Đang kiểm tra hiện trạng của toàn bộ hệ thống thanh toán"]) {
-        for (const maxWidth of [undefined, 30, 60, 146]) {
-          for (const maxLines of [undefined, 1, 2]) {
-            const spec = { text, tone, maxWidth, maxLines };
-            const drawn = bubble(spec);
-            expect({ width: drawn.width, height: drawn.height }).toEqual(bubbleSize(spec));
-            expect(drawn.width).toBe(bubbleWidth(spec));
-            expect(drawn.width).toBeLessThanOrEqual(maxWidth ?? BUBBLE_MAX_WIDTH);
-            expect([14, 23, 32]).toContain(drawn.height);
-            expect(drawn.anchor).toEqual({ x: Math.floor(drawn.width / 2), y: drawn.height });
-            // The tip of the tail is the only pixel on the last row.
-            expect(row(drawn, drawn.height - 1).filter(Boolean)).toHaveLength(1);
-            expect(row(drawn, drawn.height - 1)[drawn.anchor.x]).toBe(slotIndex("outline"));
+  it("is the size bubbleSize says, anchored at the tail, in either face", () => {
+    for (const face of FACE_NAMES) {
+      for (const tone of TONES) {
+        for (const text of ["", "ok", "Bash", LONG]) {
+          for (const maxWidth of [undefined, 30, 60, 146]) {
+            for (const maxLines of [undefined, 1, 2]) {
+              const spec = { text, tone, maxWidth, maxLines, face };
+              const drawn = bubble(spec);
+              expect({ width: drawn.width, height: drawn.height }).toEqual(bubbleSize(spec));
+              expect(drawn.width).toBe(bubbleWidth(spec));
+              expect(drawn.width).toBeLessThanOrEqual(maxWidth ?? (face === "small" ? 64 : 88));
+              expect(drawn.anchor).toEqual({ x: Math.floor(drawn.width / 2), y: drawn.height });
+              // The tip of the tail is the only pixel on the last row.
+              expect(row(drawn, drawn.height - 1).filter(Boolean)).toHaveLength(1);
+              expect(row(drawn, drawn.height - 1)[drawn.anchor.x]).toBe(slotIndex("outline"));
+            }
           }
         }
       }
     }
-    expect(BUBBLE_HEIGHT).toBe(14);
   });
 
-  it("grows a line at a time, up to the lines allowed", () => {
-    const text = "Xong rồi, đã sửa lỗi ở cổng thanh toán và chạy lại toàn bộ kiểm thử";
-    expect(bubbleSize({ text: "ok", tone: "say" }).height).toBe(14);
-    expect(bubbleSize({ text, tone: "say", maxLines: 1 }).height).toBe(14);
-    expect(bubbleSize({ text, tone: "say", maxLines: 2 }).height).toBe(23);
-    expect(bubbleSize({ text, tone: "say" }).height).toBe(32);
-    expect(bubbleSize({ text, tone: "say", maxLines: 9, maxWidth: 200 }).height).toBeLessThan(32);
-    // A tool bubble is one short line whatever is asked.
-    expect(bubbleSize({ text, tone: "tool", maxLines: 3 }).height).toBe(14);
-    // Two lines hold more of the text than one.
-    expect(bubble({ text, tone: "say", maxLines: 2 }).pixels.filter((value) => value === slotIndex("outline")).length).toBeGreaterThan(
-      bubble({ text, tone: "say", maxLines: 1 }).pixels.filter((value) => value === slotIndex("outline")).length,
-    );
-  });
-
-  it("draws at a readable crisp scale whatever the room's", () => {
-    expect(bubbleScale(2)).toBe(1.5);
-    expect(bubbleScale(1)).toBe(2);
-    expect(bubbleScale(5 / 3)).toBeCloseTo(1.8);
-    expect(bubbleScale(3)).toBeCloseTo(5 / 3);
-    for (const ratio of [1, 1.25, 1.5, 5 / 3, 2, 2.625, 3]) {
-      const scale = bubbleScale(ratio);
-      expect(scale * 7, `capital height at ${ratio}`).toBeGreaterThanOrEqual(9.8);
-      expect(scale).toBeLessThanOrEqual(2.4);
+  it("keeps the default bubble in proportion to a character", () => {
+    expect(BUBBLE_MAX_WIDTH).toBe(64);
+    expect(BUBBLE_HEIGHT).toBe(10);
+    // A one-word tool bubble: about a character wide, well under half its height.
+    expect(bubbleSize({ text: "Bash", tone: "tool" })).toEqual({ width: 19, height: 9 });
+    expect(bubbleSize({ text: "Read", tone: "tool", status: "completed" }).width).toBeLessThanOrEqual(26);
+    for (const name of ["Bash", "Read", "Edit", "Grep", "Write", "Task"]) {
+      expect(bubbleSize({ text: name, tone: "tool" }).width, name).toBeLessThanOrEqual(1.5 * CHARACTER_WIDTH);
     }
+    expect([1, 2, 3].map((maxLines) => bubbleSize({ text: LONG, tone: "say", maxLines }).height)).toEqual([10, 17, 24]);
+    expect(bubbleSize({ text: LONG, tone: "say" }).height).toBeLessThanOrEqual(CHARACTER_HEIGHT);
+    // The regular face is still there for a caller that wants it.
+    expect([1, 2, 3].map((maxLines) => bubbleSize({ text: LONG, tone: "say", maxLines, face: "regular" }).height)).toEqual([14, 23, 32]);
+    expect(bubbleSize({ text: "Bash", tone: "tool", face: "regular" }).width).toBeGreaterThan(19);
+  });
+
+  it("grows only as far as the lines allowed, and a tool stays on one", () => {
+    expect(bubbleSize({ text: "ok", tone: "say" }).height).toBe(10);
+    expect(bubbleSize({ text: LONG, tone: "say", maxLines: 9, maxWidth: 300 }).height).toBeLessThan(24);
+    expect(bubbleSize({ text: LONG, tone: "tool", maxLines: 3 }).height).toBe(9);
+    const inked = (maxLines: number) => {
+      const drawn = bubble({ text: LONG, tone: "say", maxLines });
+      return [...drawn.pixels].filter((value) => value === slotIndex("outline")).length;
+    };
+    expect(inked(2)).toBeGreaterThan(inked(1));
+    expect(inked(3)).toBeGreaterThan(inked(2));
+  });
+
+  it("is drawn at the room's scale", () => {
+    expect(bubbleScale(2)).toBe(1);
+    expect(bubbleScale(1)).toBe(1);
+    expect(bubbleScale(5 / 3)).toBeCloseTo(1.2);
+    expect(bubbleScale(3)).toBe(1);
   });
 
   it("moves the tail where asked and keeps it off the corners", () => {
@@ -792,42 +816,60 @@ describe("bubbles", () => {
     const width = bubbleWidth(spec);
     expect(bubble({ ...spec, tailX: 10 }).anchor.x).toBe(10);
     expect(bubble({ ...spec, tailX: 10.4 }).anchor.x).toBe(10);
-    expect(bubble({ ...spec, tailX: -50 }).anchor.x).toBe(4);
-    expect(bubble({ ...spec, tailX: 999 }).anchor.x).toBe(width - 5);
+    expect(bubble({ ...spec, tailX: -50 }).anchor.x).toBe(2);
+    expect(bubble({ ...spec, tailX: 999 }).anchor.x).toBe(width - 3);
     expect(bubble({ ...spec, tailX: 10 }).width).toBe(width);
+    expect(bubble({ ...spec, face: "regular", tailX: -50 }).anchor.x).toBe(4);
   });
 
   it("tells tones and tool states apart without colour", () => {
-    const ink = (bitmap: Bitmap, fill: number) =>
-      Array.from(bitmap.pixels, (value) => (value !== 0 && value !== fill && value !== slotIndex("outline") ? 1 : 0)).join("");
-    const shapes = [
-      ...TONES.map((tone) => bubble({ text: "go", tone, maxWidth: 60 })),
-      bubble({ text: "go", tone: "tool", status: "completed", maxWidth: 60 }),
-      bubble({ text: "go", tone: "tool", status: "failed", maxWidth: 60 }),
-      bubble({ text: "go", tone: "tool", status: "canceled", maxWidth: 60 }),
-    ].map((drawn) => `${drawn.width}:${ink(drawn, drawn.pixels[drawn.width + 2]!)}`);
-    expect(new Set(shapes).size).toBe(shapes.length);
-    // Speech has rounded corners, the tool box square ones.
-    expect(bubble({ text: "go", tone: "say" }).pixels[0]).toBe(0);
-    expect(bubble({ text: "go", tone: "tool" }).pixels[0]).toBe(slotIndex("outline"));
+    // The fill is whatever colour covers most of the bubble; the marks are everything else inside.
+    const fillOf = (bitmap: Bitmap) => {
+      const counts = new Map<number, number>();
+      for (const value of bitmap.pixels) if (value !== 0) counts.set(value, (counts.get(value) ?? 0) + 1);
+      return [...counts].sort((one, other) => other[1] - one[1])[0]![0];
+    };
+    const ink = (bitmap: Bitmap) => {
+      const fill = fillOf(bitmap);
+      const edge = (index: number) => {
+        const [x, y] = [index % bitmap.width, Math.floor(index / bitmap.width)];
+        return x < 2 || y < 1 || x > bitmap.width - 3 || y > bitmap.height - 4;
+      };
+      return Array.from(bitmap.pixels, (value, index) => (value !== 0 && value !== fill && !edge(index) ? 1 : 0)).join("");
+    };
+    for (const face of FACE_NAMES) {
+      const drawn = [
+        ...TONES.map((tone) => bubble({ text: "go", tone, maxWidth: 60, face })),
+        bubble({ text: "go", tone: "tool", status: "completed", maxWidth: 60, face }),
+        bubble({ text: "go", tone: "tool", status: "failed", maxWidth: 60, face }),
+        bubble({ text: "go", tone: "tool", status: "canceled", maxWidth: 60, face }),
+      ];
+      // Shape (corners, height), width and the marks inside, never the fill colour.
+      const shapes = drawn.map((one) => `${one.width}x${one.height}:${one.pixels[0] === 0}:${ink(one)}`);
+      expect(new Set(shapes).size, face).toBe(shapes.length);
+      // Speech has its corners taken off, the tool box has them.
+      expect(bubble({ text: "go", tone: "say", face }).pixels[0]).toBe(0);
+      expect(bubble({ text: "go", tone: "tool", face }).pixels[0]).toBe(slotIndex("outline"));
+    }
   });
 
   it("draws the words it was given", () => {
     const plain = bubble({ text: "Lỗi", tone: "say" });
     expect(plain).toBe(bubble({ text: "Loi", tone: "say" }));
     expect(plain.pixels).not.toEqual(bubble({ text: "Lol", tone: "say" }).pixels);
-    expect(bubble({ text: "", tone: "say" }).width).toBe(9);
-    expect(bubble({ text: "a b", tone: "say", maxWidth: 9 + 5 })).not.toBe(bubble({ text: "a b", tone: "say" }));
+    expect(plain).not.toBe(bubble({ text: "Loi", tone: "say", face: "regular" }));
+    expect(bubble({ text: "", tone: "say" }).width).toBe(5);
+    expect(bubble({ text: "", tone: "say", face: "regular" }).width).toBe(9);
   });
 
   it("makes a count plate with the digits on it", () => {
     const plate = tag("159");
-    expect(plate.height).toBe(12);
-    expect(plate.width).toBe(2 + 4 + textWidth("159"));
-    expect(plate.anchor).toEqual({ x: Math.floor(plate.width / 2), y: 12 });
+    expect([plate.width, plate.height]).toEqual([2 + 2 + textWidth("159", "small"), 9]);
+    expect(plate.anchor).toEqual({ x: Math.floor(plate.width / 2), y: 9 });
     expect(opaque(plate).every(Boolean)).toBe(true);
     expect(plate.pixels).not.toEqual(tag("158").pixels);
     expect(tag("159")).toBe(plate);
+    expect(tag("159", "regular").height).toBe(12);
   });
 
   it("keeps a bounded number of drawings", () => {

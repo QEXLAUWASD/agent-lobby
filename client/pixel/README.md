@@ -45,12 +45,12 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | rug (flat, drawn right after the floor) | 32 × 16 | bottom centre | 1 |
 | stool | 16 × 13 | bottom centre | 1 |
 | archive | 16 × 29 | bottom centre | levels 0 to 4, via `level` |
-| tag(text) | text width + 6 × 12 | bottom centre | 1 |
+| tag(text) | text width + 4 × 9 | bottom centre | 1 |
 | screenH | 16 × 10 | bottom centre | 1 |
 | screenV | 4 × 22 | bottom centre | 1 |
 | every `tile(id)` and `wallTop(joins)` | 16 × 16 | 0, 0 | 1 |
 | door(faceRows) | 16 × 16·faceRows | 0, 0 | 1 |
-| bubble | 9 to `maxWidth` (default 88) × 14, 23 or 32 | `tailX`, height (tip of the tail) | 1 |
+| bubble | 5 to `maxWidth` (default 64) × 10, 17 or 24; a tool box is 9 tall | `tailX`, height (tip of the tail) | 1 |
 
 Put a character's anchor on the bottom centre of the tile it stands or sits on. A seated character
 facing up carries the chair's back in its own drawing, so the order chair, desk, character is right
@@ -133,41 +133,45 @@ Left is always the mirror of right.
 `prop("archive", { level })` is a three-drawer filing cabinet standing for the agents who have left
 a room. `archiveLevel(count)` turns a count into a level: 0 for none, then 1 to 2, 3 to 9, 10 to 29
 and 30 or more. Each level labels one more drawer from the top, and the last puts a box on the
-cabinet. `tag(text)` is a small plate in the bubble font for the count itself; draw it at the
-bubble scale.
+cabinet. `tag(text)` is a small plate in the bubble font for the count itself.
 
-## Speech bubbles and the font
+## Speech bubbles and the fonts
 
-`bubble({ text, tone, status?, maxWidth?, maxLines?, tailX? })` returns one bitmap with the words
-drawn in, so a bubble of any length is one image. The text wraps at spaces to at most `maxLines`
-(default 3; a `tool` bubble is always one line) inside `maxWidth` (default 88 art pixels), and ends
-with an ellipsis if it still does not fit. `bubbleSize(spec)` gives the width and height without
-drawing: 14, 23 or 32 art pixels tall for one, two or three lines, tail included. Pass the
-speaker's offset back as `tailX` and the tail keeps pointing at them when the bubble is pushed in
-from an edge.
+`bubble({ text, tone, status?, face?, maxWidth?, maxLines?, tailX? })` returns one bitmap with the
+words drawn in, so a bubble of any length is one image. The text wraps at spaces to at most
+`maxLines` (default 3; a `tool` bubble is always one line) inside `maxWidth`, and ends with an
+ellipsis if it still does not fit. `bubbleSize(spec)` gives the width and height without drawing.
+Pass the speaker's offset back as `tailX` and the tail keeps pointing at them when the bubble is
+pushed in from an edge. `tag(text, face?)` is a tail-less plate for a count.
 
-Bubbles are drawn at their own scale, not the room's: `bubbleScale(pixelRatio)` is the smallest
-crisp scale at or above 1.4, which is 1.5 on a 2× screen, 2 on a 1× screen and 1.8 on a 1.67× one.
-A capital is then 10 to 14 layout pixels tall while the room can be as small as 1×. A smaller face
-was not drawn: 3 × 5 or 4 × 6 at the room's 1× would be 5 or 6 layout pixels tall.
+Draw bubbles and tags at the room's scale. They are sized against a 16 × 24 character:
+
+| Face | Capitals | Default `maxWidth` | One line | Two | Three | Tool, "Bash" | `tag("159")` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `small` (default) | 3 × 5, one descender row | 64 | 10 | 17 | 24 | 19 × 9 | 15 × 9 |
+| `regular` | 5 × 7, two descender rows | 88 | 14 | 23 | 32 | 35 × 13 | 21 × 12 |
+
+Heights are art pixels, tail included. In the small face a capital is 5 layout pixels tall at scale
+1 and 6 at 1.2: in proportion to the characters, readable close to, not at arm's length. The full
+text belongs in the accessibility label.
 
 | Tone | Shape | Icon | Fill |
 | --- | --- | --- | --- |
-| say | rounded | none | paper |
-| tool | square | prompt while running, check when completed, dash when canceled, cross when failed | dark screen; danger when failed |
-| tell | rounded | arrow | accent |
-| ask | rounded | ? | warning |
-| alert | rounded | ! | danger |
+| say | corners off | none | paper |
+| tool | square | none while running in the small face (a prompt in the regular one), check when completed, dash when canceled, cross when failed | dark screen; danger when failed |
+| tell | corners off | arrow | accent |
+| ask | corners off | ? | warning |
+| alert | corners off | ! | danger |
 
-The font is 5 × 7 with two rows of descender and proportional widths: ASCII letters, digits and
-punctuation, an ellipsis, four icons and a fallback block. 88 art pixels hold about 14 characters
-a line.
+Both faces are proportional and cover the same characters: ASCII letters, digits and punctuation,
+an ellipsis, four icons and a fallback block.
 
-`foldText` rewrites text into what the font has: accented Latin letters, Vietnamese included,
+`foldText` rewrites text into what the fonts have: accented Latin letters, Vietnamese included,
 become their base letter (đ → d), whitespace runs become one space, and a run of anything else
-(emoji, CJK) becomes a single fallback block. `textWidth` measures in art pixels,
-`fitText(text, maxWidth)` cuts to one line with an ellipsis and `wrapText(text, maxWidth, maxLines)`
-wraps. `bubble` does all of it itself.
+(emoji, CJK) becomes a single fallback block. `textWidth(text, face?)` measures in art pixels,
+`fitText(text, maxWidth, face?)` cuts to one line with an ellipsis and
+`wrapText(text, maxWidth, maxLines, face?)` wraps; these three default to the regular face.
+`bubble` does all of it itself.
 
 ## Caches
 

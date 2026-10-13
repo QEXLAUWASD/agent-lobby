@@ -1,8 +1,11 @@
 /**
- * The office typeface: 5 x 7 capitals, proportional widths, two rows of descender. Drawn here, one
- * string per glyph, rows separated by `/`, `#` for ink. A glyph with seven rows sits on the
- * baseline; one with more hangs below it.
+ * The office typefaces, drawn here: one string per glyph, rows separated by `/`, `#` for ink.
+ * `regular` has 5 x 7 capitals and two rows of descender; `small` has 3 x 5 capitals and one. Both
+ * are proportional and cover the same characters. A glyph with as many rows as the ascent sits on
+ * the baseline; one with more hangs below it.
  */
+
+export type Face = "regular" | "small";
 
 export const FONT_ASCENT = 7;
 export const FONT_DESCENT = 2;
@@ -16,7 +19,7 @@ export const ELLIPSIS = "…";
 /** Icons live in the private use area so no real text can collide with them. */
 export const ICON = { prompt: "", arrow: "", check: "", cross: "" } as const;
 
-const GLYPHS: Readonly<Record<string, string>> = {
+const REGULAR: Readonly<Record<string, string>> = {
   " ": ".../.../.../.../.../.../...",
   A: ".###./#...#/#...#/#####/#...#/#...#/#...#",
   B: "####./#...#/#...#/####./#...#/#...#/####.",
@@ -120,29 +123,149 @@ const GLYPHS: Readonly<Record<string, string>> = {
   [ICON.cross]: "...../#...#/.#.#./..#../.#.#./#...#/.....",
 };
 
+const SMALL: Readonly<Record<string, string>> = {
+  " ": "../../../../..",
+  A: ".#./#.#/###/#.#/#.#",
+  B: "##./#.#/##./#.#/##.",
+  C: ".##/#../#../#../.##",
+  D: "##./#.#/#.#/#.#/##.",
+  E: "###/#../##./#../###",
+  F: "###/#../##./#../#..",
+  G: ".##/#../#.#/#.#/.##",
+  H: "#.#/#.#/###/#.#/#.#",
+  I: "###/.#./.#./.#./###",
+  J: "..#/..#/..#/#.#/.#.",
+  K: "#.#/#.#/##./#.#/#.#",
+  L: "#../#../#../#../###",
+  M: "#...#/##.##/#.#.#/#...#/#...#",
+  N: "#..#/##.#/#.##/#..#/#..#",
+  O: ".#./#.#/#.#/#.#/.#.",
+  P: "##./#.#/##./#../#..",
+  Q: ".##./#..#/#..#/#.#./.#.#",
+  R: "##./#.#/##./#.#/#.#",
+  S: ".##/#../.#./..#/##.",
+  T: "###/.#./.#./.#./.#.",
+  U: "#.#/#.#/#.#/#.#/.##",
+  V: "#.#/#.#/#.#/.#./.#.",
+  W: "#...#/#...#/#.#.#/##.##/#...#",
+  X: "#.#/#.#/.#./#.#/#.#",
+  Y: "#.#/#.#/.#./.#./.#.",
+  Z: "###/..#/.#./#../###",
+  a: ".../.##/#.#/#.#/.##",
+  b: "#../##./#.#/#.#/##.",
+  c: ".../.##/#../#../.##",
+  d: "..#/.##/#.#/#.#/.##",
+  e: ".../.#./###/#../.##",
+  f: ".#/#./##/#./#.",
+  g: ".../.##/#.#/.##/..#/##.",
+  h: "#../##./#.#/#.#/#.#",
+  i: "#/./#/#/#",
+  j: ".#/../.#/.#/.#/#.",
+  k: "#../#.#/##./##./#.#",
+  l: "#/#/#/#/#",
+  m: "...../##.#./#.#.#/#.#.#/#.#.#",
+  n: ".../##./#.#/#.#/#.#",
+  o: ".../.#./#.#/#.#/.#.",
+  p: ".../##./#.#/#.#/##./#..",
+  q: ".../.##/#.#/#.#/.##/..#",
+  r: ".../#.#/##./#../#..",
+  s: ".../.##/##./..#/##.",
+  t: "#./##/#./#./.#",
+  u: ".../#.#/#.#/#.#/.##",
+  v: ".../#.#/#.#/#.#/.#.",
+  w: "...../#...#/#.#.#/#.#.#/.#.#.",
+  x: ".../#.#/.#./.#./#.#",
+  y: ".../#.#/#.#/.##/..#/##.",
+  z: ".../###/.#./#../###",
+  "0": "###/#.#/#.#/#.#/###",
+  "1": ".#./##./.#./.#./###",
+  "2": "##./..#/.#./#../###",
+  "3": "##./..#/.#./..#/##.",
+  "4": "#.#/#.#/###/..#/..#",
+  "5": "###/#../##./..#/##.",
+  "6": ".##/#../###/#.#/###",
+  "7": "###/..#/.#./.#./.#.",
+  "8": "###/#.#/###/#.#/###",
+  "9": "###/#.#/###/..#/##.",
+  ".": "././././#",
+  ",": "../../../../.#/#.",
+  ":": "./#/./#/.",
+  ";": "../.#/../.#/.#/#.",
+  "!": "#/#/#/./#",
+  "?": "##./..#/.#./.../.#.",
+  "-": ".../.../###/.../...",
+  _: ".../.../.../.../###",
+  "+": ".../.#./###/.#./...",
+  "=": ".../###/.../###/...",
+  "/": "..#/..#/.#./#../#..",
+  "\\": "#../#../.#./..#/..#",
+  "(": ".#/#./#./#./.#",
+  ")": "#./.#/.#/.#/#.",
+  "[": "##/#./#./#./##",
+  "]": "##/.#/.#/.#/##",
+  "{": ".##/.#./#../.#./.##",
+  "}": "##./.#./..#/.#./##.",
+  "<": "..#/.#./#../.#./..#",
+  ">": "#../.#./..#/.#./#..",
+  "'": "#/#/././.",
+  '"': "#.#/#.#/.../.../...",
+  "`": "#./.#/../../..",
+  "*": "#.#/.#./#.#/.../...",
+  "#": "#.#/###/#.#/###/#.#",
+  "@": ".##./#..#/#.##/#.../.###",
+  "&": ".#./#.#/.#./#.#/.##",
+  "%": "#.#/..#/.#./#../#.#",
+  $: ".##/##./.#./.##/##.",
+  "^": ".#./#.#/.../.../...",
+  "~": "..../.#.#/#.#./..../....",
+  "|": "#/#/#/#/#/#",
+  [ELLIPSIS]: "...../...../...../...../#.#.#",
+  [FALLBACK]: ".../###/###/###/...",
+  [ICON.prompt]: "#..../.#.../..#../.#.../#.###",
+  [ICON.arrow]: "..#../...#./#####/...#./..#..",
+  [ICON.check]: "..../...#/..#./#.#./.#..",
+  [ICON.cross]: ".../#.#/.#./#.#/...",
+};
+
+export interface FaceMetrics {
+  /** Rows from the top of a capital to the baseline. */
+  readonly ascent: number;
+  /** Rows a glyph may hang below the baseline. */
+  readonly descent: number;
+  readonly height: number;
+  readonly glyphs: Readonly<Record<string, string>>;
+}
+
+export const FACES: Readonly<Record<Face, FaceMetrics>> = {
+  regular: { ascent: FONT_ASCENT, descent: FONT_DESCENT, height: FONT_HEIGHT, glyphs: REGULAR },
+  small: { ascent: 5, descent: 1, height: 6, glyphs: SMALL },
+};
+
 export interface Glyph {
   readonly width: number;
-  /** One string per row, top first, `#` for ink. Seven rows, or more for a descender. */
+  /** One string per row, top first, `#` for ink: `ascent` rows, or more for a descender. */
   readonly rows: readonly string[];
 }
 
 const parsed = new Map<string, Glyph>();
 
+/** Whether the faces draw `char`. They cover the same characters. */
 export function hasGlyph(char: string): boolean {
-  return Object.prototype.hasOwnProperty.call(GLYPHS, char);
+  return Object.prototype.hasOwnProperty.call(REGULAR, char);
 }
 
 /** The glyph for one character, or the fallback mark when the font has none. */
-export function glyph(char: string): Glyph {
+export function glyph(char: string, face: Face = "regular"): Glyph {
   const key = hasGlyph(char) ? char : FALLBACK;
-  let found = parsed.get(key);
+  const cacheKey = `${face}:${key}`;
+  let found = parsed.get(cacheKey);
   if (!found) {
-    const rows = GLYPHS[key]!.split("/");
+    const rows = FACES[face].glyphs[key]!.split("/");
     found = { width: rows[0]!.length, rows };
-    parsed.set(key, found);
+    parsed.set(cacheKey, found);
   }
   return found;
 }
 
-/** Every character the font draws. */
-export const GLYPH_CHARS: readonly string[] = Object.keys(GLYPHS);
+/** Every character the faces draw. */
+export const GLYPH_CHARS: readonly string[] = Object.keys(REGULAR);
