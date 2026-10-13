@@ -56,6 +56,12 @@ interface Entry<Update> {
   ready: Promise<unknown>;
 }
 
+interface Slot<Update> {
+  agentId: string;
+  entry: Entry<Update>;
+  holder: Holder<Update>;
+}
+
 const ANYONE = {};
 
 export function createFeedHub<Update extends { event: { type: string } }>(
@@ -75,20 +81,19 @@ export function createFeedHub<Update extends { event: { type: string } }>(
     return all;
   };
 
-  /** Frees one slot for `asker` if it is below its share and somebody is above theirs. */
-  const makeRoom = (asker: object): boolean => {
+  /** The slot `asker` may take: it is below its share and somebody else is above theirs. */
+  const slotFor = (asker: object): Slot<Update> | null => {
     const everyone = views();
     everyone.add(asker);
     const share = Math.max(1, Math.floor(cap / everyone.size));
-    if (held(asker) >= share) return false;
-    type Slot = { agentId: string; entry: Entry<Update>; holder: Holder<Update> };
-    let victim = null as Slot | null;
+    if (held(asker) >= share) return null;
+    let victim: Slot<Update> | null = null;
     let most = share;
     for (const view of everyone) {
       const count = held(view);
       if (view === asker || count <= most) continue;
       // Only an agent this view alone is watching frees a slot.
-      let worst = null as Slot | null;
+      let worst: Slot<Update> | null = null;
       for (const [agentId, entry] of open) {
         if (entry.holders.size !== 1) continue;
         const [holder] = entry.holders as unknown as [Holder<Update>];
@@ -100,34 +105,51 @@ export function createFeedHub<Update extends { event: { type: string } }>(
         most = count;
       }
     }
-    if (!victim) return false;
-    open.delete(victim.agentId);
-    victim.entry.holders.clear();
-    victim.entry.stop();
-    victim.holder.claim.onRevoked();
-    return true;
+    return victim;
+  };
+
+  /** Opens the daemon subscription for an agent and fans its updates out to `holders`. Null if it cannot be opened. */
+  const connect = (agentId: string, holders: Set<Holder<Update>>): Entry<Update> | null => {
+    try {
+      const subscription = source.subscribe(agentId, (update) => {
+        const current = open.get(agentId);
+        if (!current || current.holders !== holders) return;
+        // An error means the SDK has already released the subscription.
+        if (update.event.type === "error") open.delete(agentId);
+        for (const holder of [...holders]) holder.handler(update);
+      });
+      const entry = { holders, stop: () => subscription.stop(), ready: subscription.ready };
+      open.set(agentId, entry);
+      return entry;
+    } catch {
+      return null;
+    }
   };
 
   return {
     size: () => open.size,
     acquire(agentId, handler, claim = { view: ANYONE, rank: 0, onRevoked() {} }) {
-      let entry = open.get(agentId);
+      let entry = open.get(agentId) ?? null;
       if (!entry) {
-        if (open.size >= cap && !makeRoom(claim.view)) return null;
-        const holders = new Set<Holder<Update>>();
-        try {
-          const subscription = source.subscribe(agentId, (update) => {
-            const current = open.get(agentId);
-            if (!current || current.holders !== holders) return;
-            // An error means the SDK has already released the subscription.
-            if (update.event.type === "error") open.delete(agentId);
-            for (const holder of [...holders]) holder.handler(update);
-          });
-          entry = { holders, stop: () => subscription.stop(), ready: subscription.ready };
-        } catch {
-          return null;
+        const victim = open.size >= cap ? slotFor(claim.view) : null;
+        if (open.size >= cap && !victim) return null;
+        if (victim) {
+          // Close the slot first, so the daemon never carries more than the cap.
+          open.delete(victim.agentId);
+          victim.entry.stop();
         }
-        open.set(agentId, entry);
+        entry = connect(agentId, new Set());
+        if (victim) {
+          if (entry) {
+            victim.entry.holders.clear();
+            victim.holder.claim.onRevoked();
+          } else if (!connect(victim.agentId, victim.entry.holders)) {
+            // The newcomer could not be opened and neither could the slot it was given: its holder loses it after all.
+            victim.entry.holders.clear();
+            victim.holder.claim.onRevoked();
+          }
+        }
+        if (!entry) return null;
       }
       const mine = entry;
       const holder: Holder<Update> = { handler, claim };
@@ -139,9 +161,11 @@ export function createFeedHub<Update extends { event: { type: string } }>(
           if (released) return;
           released = true;
           if (!mine.holders.delete(holder)) return;
-          if (mine.holders.size > 0 || open.get(agentId) !== mine) return;
+          // A slot that was closed and reopened lives on under the same holders.
+          const current = open.get(agentId);
+          if (mine.holders.size > 0 || !current || current.holders !== mine.holders) return;
           open.delete(agentId);
-          mine.stop();
+          current.stop();
         },
       };
     },

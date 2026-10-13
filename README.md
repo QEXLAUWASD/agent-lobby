@@ -33,7 +33,8 @@ who does not match, in place.
 
 Characters walk. When an agent starts work, finishes, goes on a break or closes, its character
 walks there at one pace along the aisle and the room's corridor; a new agent walks in from the door
-and a closed one walks out. When the room itself changes (a resize, a new desk row) characters are
+and a closed one walks out (up to four at a time: when more leave at once, as when a whole crew
+is archived, the rest simply go). When the room itself changes (a resize, a new desk row) characters are
 simply placed.
 
 A message from one agent to another shows as a pixel bubble over the sender and an envelope that

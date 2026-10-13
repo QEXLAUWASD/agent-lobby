@@ -188,7 +188,7 @@ describe("two views contending", () => {
     expect(second.want("other", 1)).toBe(true);
   });
 
-  it("always grants a late view at least one slot, however many views there are", () => {
+  it("grants a late view one slot from a view above its share, and refuses a third when everyone is at one", () => {
     const daemon = fakeDaemon();
     const hub = createFeedHub(daemon.source, 2);
     const first = view(hub, "first");
@@ -201,6 +201,59 @@ describe("two views contending", () => {
     const third = view(hub, "third");
     expect(third.want("d", 0)).toBe(false);
     expect(hub.size()).toBe(2);
+  });
+});
+
+describe("a slot taken for a subscription that cannot be opened", () => {
+  it("goes back to the view it was taken from, which loses nothing", () => {
+    const daemon = fakeDaemon(["broken"]);
+    const hub = createFeedHub(daemon.source, 2);
+    const seen: string[] = [];
+    const revoked: string[] = [];
+    const first = {};
+    const keep = (agentId: string, rank: number) =>
+      hub.acquire(agentId, (update) => seen.push(`${agentId}:${update.event.type}`), { view: first, rank, onRevoked: () => revoked.push(agentId) });
+    const a = keep("a", 0);
+    const b = keep("b", 1);
+    expect(hub.acquire("broken", () => {}, { view: {}, rank: 0, onRevoked() {} })).toBeNull();
+    expect(revoked).toEqual([]);
+    expect(hub.size()).toBe(2);
+    // The slot was closed and opened again; its holder still hears it, and can still give it up.
+    expect(daemon.stopped).toEqual(["b"]);
+    expect(daemon.opened).toEqual(["a", "b", "b"]);
+    daemon.emit("b");
+    daemon.emit("a");
+    expect(seen).toEqual(["b:timeline", "a:timeline"]);
+    b?.release();
+    expect(hub.size()).toBe(1);
+    expect(daemon.stopped).toEqual(["b", "b"]);
+    a?.release();
+    expect(hub.size()).toBe(0);
+  });
+
+  it("is lost only when it cannot be reopened either, and its holder is told", () => {
+    const daemon = fakeDaemon();
+    const flaky = { ...daemon.source };
+    let refuse = false;
+    flaky.subscribe = (agentId, handler) => {
+      if (refuse) throw new Error("gone");
+      return daemon.source.subscribe(agentId, handler);
+    };
+    const hub = createFeedHub(flaky, 1);
+    const revoked: string[] = [];
+    hub.acquire("a", () => {}, { view: {}, rank: 0, onRevoked: () => revoked.push("a") });
+    const again = hub.acquire("a2", () => {}, { view: {}, rank: 0, onRevoked() {} });
+    // One view at its share of one: nothing to take.
+    expect(again).toBeNull();
+    expect(revoked).toEqual([]);
+    const two = createFeedHub(flaky, 2);
+    const owner = {};
+    two.acquire("x", () => {}, { view: owner, rank: 0, onRevoked() {} });
+    two.acquire("y", () => {}, { view: owner, rank: 1, onRevoked: () => revoked.push("y") });
+    refuse = true;
+    expect(two.acquire("z", () => {}, { view: {}, rank: 0, onRevoked() {} })).toBeNull();
+    expect(revoked).toEqual(["y"]);
+    expect(two.size()).toBe(1);
   });
 });
 
