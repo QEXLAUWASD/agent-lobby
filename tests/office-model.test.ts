@@ -134,7 +134,8 @@ describe("layoutOffice", () => {
     expect(room?.pods.filter((entry) => entry.width === DESK_WIDTH).map((entry) => entry.rootId)).toEqual(["solo-1", "solo-2"]);
     const desk = layout.desks.get("meow-a");
     expect(desk?.seat).toEqual({ x: (desk?.cell.x ?? 0) + 0.5, y: (desk?.cell.y ?? 0) + 1 });
-    expect(desk?.stand).toEqual({ x: (desk?.cell.x ?? 0) + 1.5, y: (desk?.cell.y ?? 0) + 1 });
+    // It stands where it sat: in front of its own chair, in nobody's way.
+    expect(desk?.stand).toEqual(desk?.seat);
     expect(desk?.aisleY).toBe((desk?.cell.y ?? 0) + 2);
   });
 

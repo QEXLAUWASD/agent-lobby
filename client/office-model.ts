@@ -69,7 +69,7 @@ export interface Desk {
   cell: Point;
   /** Where the character sits, facing up at the desk. */
   seat: Point;
-  /** Where the character stands when it has stepped away from the keyboard: beside its chair. */
+  /** Where the character stands when it has turned from the keyboard: at its own chair. */
   stand: Point;
   /** The free row under the desk cell, which characters walk along. */
   aisleY: number;
@@ -268,9 +268,10 @@ function placePod(plan: PodPlan, origin: Point, workspaceId: string): Pod {
         role: roleOf(member.agent),
         remote: (member.agent.workspaceId ?? "") !== workspaceId,
         cell,
-        // Half a tile in: under the middle of the desk. Its standing spot is the other half of the cell.
+        // Half a tile in: under the middle of the desk. It stands up where it sat, in front of its
+        // chair and turned to the room, so nobody standing is in a neighbour's way.
         seat: { x: cell.x + 0.5, y: cell.y + 1 },
-        stand: { x: cell.x + 1.5, y: cell.y + 1 },
+        stand: { x: cell.x + 0.5, y: cell.y + 1 },
         aisleY: cell.y + DESK_HEIGHT - 1,
       };
     });

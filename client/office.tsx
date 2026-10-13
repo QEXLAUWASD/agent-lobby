@@ -334,7 +334,8 @@ const Character = memo(
         {presence.emote && walking === null && !hidden ? (
           <View
             pointerEvents="none"
-            style={{ position: "absolute", left: presence.seated ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
+            // At the desk the emote sits to the right of the head, clear of the monitor.
+            style={{ position: "absolute", left: spot === "seat" || spot === "stand" ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
           >
             <EmoteSprite theme={theme} tile={tile} kind={presence.emote} frame={emoteFrame} />
           </View>
@@ -839,8 +840,13 @@ export function OfficeScene({
   return (
     <ScrollView style={{ flex: 1 }} onScroll={onScroll} onLayout={onLayout} scrollEventThrottle={200}>
       {/* Only a width too narrow for one desk scrolls sideways. */}
-      <ScrollView horizontal scrollEnabled={office.cramped} contentContainerStyle={{ width, height }}>
-        <View style={{ width, height }}>
+      <ScrollView
+        horizontal
+        scrollEnabled={office.cramped}
+        contentContainerStyle={{ minWidth: "100%", height, justifyContent: "center" }}
+      >
+        {/* A pane is rarely a whole number of tiles wide: the office sits in the middle of what is left over. */}
+        <View style={{ width, height, alignSelf: "center" }}>
           {office.rooms.map((room) => (
             <RoomBackdrop key={room.workspaceId} theme={theme} tile={tile} room={room} />
           ))}
