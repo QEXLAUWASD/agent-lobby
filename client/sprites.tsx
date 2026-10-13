@@ -216,49 +216,43 @@ export const BubbleSprite = memo(function BubbleSprite({
 
 /** What a room's drawing depends on: its shape and furniture, not where it stands. */
 function roomKey(room: Room): string {
-  const headerBottom = room.header.y + room.header.height - room.y;
   const zones = room.zones
     .map((zone) => `${zone.kind}@${zone.x - room.x},${zone.y - room.y},${zone.width}x${zone.height}:${zone.props.map((item) => `${item.id}@${item.x - room.x},${item.y - room.y}`).join(",")}`)
     .join(";");
-  return `room:${room.width}x${room.height}:h${headerBottom}:l${room.lounge.y - room.y}:${zones}`;
+  const wall = room.lounge.wall ? `${room.lounge.wall.x - room.x}+${room.lounge.wall.width}` : "";
+  return `room:${room.width}x${room.height}:f${room.floorTop - room.y}:d${room.door.x - room.x}:l${room.lounge.y - room.y}:w${wall}:${zones}`;
 }
 
 const inRect = (x: number, y: number, rect: { x: number; y: number; width: number; height: number }) =>
   x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 
 function roomBitmap(room: Room, key: string): Bitmap {
-  const headerBottom = room.header.y + room.header.height;
   const layers: Layer[] = [];
+  const tileAt = (x: number, y: number): TileId => {
+    // The door: an opening in the top wall at the head of the corridor, running down to the floor.
+    if (x === room.door.x && y < room.floorTop) return y === room.y ? "door" : "doorway";
+    if (x === room.x || x === room.x + room.width - 1 || y === room.y || y === room.y + room.height - 1) return "partition";
+    if (y < room.floorTop) return "wall";
+    // The half wall the appliances, the shelves and the sofa stand against.
+    if (room.lounge.wall && inRect(x, y, room.lounge.wall)) return "wall";
+    const zone = room.zones.find((entry) => inRect(x, y, entry));
+    if (zone) return zone.kind === "pantry" ? "kitchen" : "carpet";
+    return "floor";
+  };
   for (let y = room.y; y < room.y + room.height; y += 1) {
     for (let x = room.x; x < room.x + room.width; x += 1) {
-      const edge = x === room.x || x === room.x + room.width - 1 || y === room.y + room.height - 1 || y === room.y;
-      const zone = room.zones.find((entry) => inRect(x, y, entry));
-      const id: TileId = edge
-        ? "wallCap"
-        : y < headerBottom
-          ? "wall"
-          : room.lounge.wall && zone && y === room.lounge.wall.y
-            ? // The half wall the appliances and shelves stand against.
-              "wall"
-            : zone?.kind === "pantry"
-              ? "kitchen"
-              : zone?.kind === "lounge"
-                ? "carpet"
-                : inRect(x, y, room.lounge)
-                  ? "floorAlt"
-                  : "floor";
-      layers.push({ bitmap: tileBitmap(id), x: (x - room.x) * ART_TILE, y: (y - room.y) * ART_TILE });
+      layers.push({ bitmap: tileBitmap(tileAt(x, y)), x: (x - room.x) * ART_TILE, y: (y - room.y) * ART_TILE });
     }
   }
-  for (const zone of room.zones) {
-    for (const item of zone.props) {
-      // Furniture stands on the bottom centre of the tiles it covers.
-      layers.push({
-        bitmap: prop(item.id),
-        x: (item.x - room.x) * ART_TILE + (PROPS[item.id].tilesWide * ART_TILE) / 2,
-        y: (item.y - room.y + 1) * ART_TILE,
-      });
-    }
+  const furniture = room.zones.flatMap((zone) => zone.props);
+  // A rug lies flat: straight after the floor, under everything else.
+  for (const item of [...furniture.filter((entry) => entry.id === "rug"), ...furniture.filter((entry) => entry.id !== "rug")]) {
+    // Furniture stands on the bottom centre of the tiles it covers.
+    layers.push({
+      bitmap: prop(item.id),
+      x: (item.x - room.x) * ART_TILE + (PROPS[item.id].tilesWide * ART_TILE) / 2,
+      y: (item.y - room.y + 1) * ART_TILE,
+    });
   }
   // `composite` is the one cache of room drawings, bounded by the renderer.
   return composite(key, room.width * ART_TILE, room.height * ART_TILE, layers);

@@ -379,8 +379,7 @@ interface DeskProps {
 }
 
 /**
- * The desk cell is the large target: three tiles square, 48 px at the smallest
- * scale. It speaks for the agent only when no character is sitting there to do
+ * The desk cell is the large target: two tiles by three, 64 by 96 px at 2×. It speaks for the agent only when no character is sitting there to do
  * so (closed, or away in the lounge), so a screen reader meets each agent once.
  */
 const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, selected, dimmed, onPress }: DeskProps) {
@@ -410,10 +409,10 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
         opacity: dimmed ? DIMMED : vacant ? 0.6 : 1,
       }}
     >
-      <View pointerEvents="none" style={{ position: "absolute", left: tile, top: tile }}>
+      <View pointerEvents="none" style={{ position: "absolute", left: tile / 2, top: tile }}>
         <ChairSprite theme={theme} tile={tile} />
       </View>
-      <View pointerEvents="none" style={{ position: "absolute", left: tile / 2, top: 0 }}>
+      <View pointerEvents="none" style={{ position: "absolute", left: 0, top: 0 }}>
         <DeskSprite theme={theme} tile={tile} screen={screen} />
       </View>
       {/* The state in the theme's own status colour, for a reader who does not know the sprites yet. */}
@@ -432,20 +431,26 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
         }}
       />
       {vacant ? (
-        <Text
-          numberOfLines={1}
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            textAlign: "center",
-            color: theme.colors.foregroundMuted,
-            fontSize: Math.min(font.xs, tile / 2),
-          }}
+        // On the chair row, clear of the monitors of the desks in the next row.
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", left: 0, right: 0, top: tile * 1.45, alignItems: "center" }}
         >
-          {STATE_LABEL[state]}
-        </Text>
+          <Text
+            numberOfLines={1}
+            style={{
+              paddingHorizontal: 3,
+              borderRadius: 3,
+              overflow: "hidden",
+              color: theme.colors.foregroundMuted,
+              backgroundColor: theme.colors.surface0,
+              fontSize: Math.min(font.xs, tile * 0.3),
+              lineHeight: Math.min(font.xs, tile * 0.3) * 1.3,
+            }}
+          >
+            {STATE_LABEL[state]}
+          </Text>
+        </View>
       ) : null}
     </Pressable>
   );

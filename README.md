@@ -8,7 +8,8 @@ Two surfaces share one component:
 - **Explorer pane and workspace tab** (`Crew`): the room of the current workspace, which can widen
   to every workspace. Managed children stay in their crew even when they run in another workspace,
   and a crew's parent from another workspace stands in the lounge as a visitor.
-- **Sidebar item** (`Crew`): every workspace at once, rooms side by side. Workspaces whose agents
+- **Sidebar item** (`Crew`): every workspace at once, as one floor plan: adjoining rooms that share
+  their partition walls, each with its door. Workspaces whose agents
   are all closed stay folded away until a search or the Closed filter asks for them. This is the
   wide view.
 

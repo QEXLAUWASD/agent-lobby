@@ -23,8 +23,11 @@ export interface Rect extends Point {
   height: number;
 }
 
-/** One desk cell: the desk on its top row, the chair under it, an aisle row below. */
-export const DESK_WIDTH = 3;
+/**
+ * One desk cell: the desk across its top row, the chair under the desk's
+ * middle, an aisle row below. Desks stand shoulder to shoulder.
+ */
+export const DESK_WIDTH = 2;
 export const DESK_HEIGHT = 3;
 /** Most desks in one row of a pod, however wide the room is. */
 export const MAX_POD_COLUMNS = 6;
@@ -32,22 +35,23 @@ const WALL = 1;
 const GAP = 1;
 /** A free column inside the left wall, from the door down to the lounge: where characters walk between rows. */
 const CORRIDOR = 1;
-const HEADER_HEIGHT = 2;
+/** Rows of wall face under the top wall. The first row of monitors rises against it. */
+const FACE_ROWS = 1;
 /**
- * The rows of the strip under the desks: a wall the appliances and shelves
- * stand against, the row in front of them, a row of floor furniture, and a
- * walkway that is always clear.
+ * The rows of the strip under the desks: a half wall with the appliances, the
+ * shelves and the sofa against it, the row in front of them, and a walkway
+ * that is always clear.
  */
-const ZONE_ROWS = 4;
+const ZONE_ROWS = 3;
 /** A room nobody is in keeps only the walkway. */
 const DORMANT_ROWS = 1;
 /** A zone is furniture, not floor: however wide the room, it stops here. */
-export const PANTRY_MAX_WIDTH = 6;
-export const LOUNGE_MAX_WIDTH = 8;
+export const PANTRY_MAX_WIDTH = 5;
+export const LOUNGE_MAX_WIDTH = 6;
 /** The narrowest room that still holds one desk between its walls. */
 export const MIN_ROOM_WIDTH = DESK_WIDTH + 2 * WALL + CORRIDOR;
-/** On a wide surface rooms sit side by side, each about this wide: five desks between the walls. */
-export const ROOM_TARGET_WIDTH = 17;
+/** On a wide surface rooms sit side by side, each about this wide: four desks between corridor and wall. */
+export const ROOM_TARGET_WIDTH = 12;
 
 export interface Desk {
   agentId: string;
@@ -86,7 +90,7 @@ export interface Pod extends Rect {
 }
 
 /** The props a zone can hold; ids, footprints and use points are the sprite catalogue's table. */
-export type ZonePropId = "fridge" | "counter" | "coffee" | "water" | "table" | "bookshelf" | "plant" | "sofa" | "lowTable" | "beanbag";
+export type ZonePropId = "fridge" | "counter" | "coffee" | "water" | "table" | "bookshelf" | "plant" | "sofa" | "beanbag" | "rug";
 
 export interface ZoneProp {
   id: ZonePropId;
@@ -129,11 +133,13 @@ export interface Room extends Rect {
   urgency: 0 | 1 | 2;
   /** Every agent in the room is closed. */
   dormant: boolean;
-  /** The strip under the top wall where a view writes the room name. */
+  /** Where a view hangs the room's name plate: on the top wall, beside the door. */
   header: Rect;
+  /** The first row of floor, under the wall. */
+  floorTop: number;
   /** The free column characters use to walk between rows. */
   corridorX: number;
-  /** Where characters come in and go out: the top of the corridor, in the wall. */
+  /** Where characters come in and go out: the head of the corridor, under the doorway in the top wall. */
   door: Point;
   pods: Pod[];
   lounge: Lounge;
@@ -262,8 +268,9 @@ function placePod(plan: PodPlan, origin: Point, workspaceId: string): Pod {
         role: roleOf(member.agent),
         remote: (member.agent.workspaceId ?? "") !== workspaceId,
         cell,
-        seat: { x: cell.x + 1, y: cell.y + 1 },
-        stand: { x: cell.x + 2, y: cell.y + 1 },
+        // Half a tile in: under the middle of the desk. Its standing spot is the other half of the cell.
+        seat: { x: cell.x + 0.5, y: cell.y + 1 },
+        stand: { x: cell.x + 1.5, y: cell.y + 1 },
         aisleY: cell.y + DESK_HEIGHT - 1,
       };
     });
@@ -291,8 +298,10 @@ function placePod(plan: PodPlan, origin: Point, workspaceId: string): Pod {
 }
 
 export interface ZoneFit {
-  pantry: { width: number; wall: ZonePropId[]; table: boolean } | null;
-  lounge: { width: number; wall: ZonePropId[]; floor: ZonePropId[] } | null;
+  pantry: { width: number; wall: ZonePropId[] } | null;
+  lounge: { width: number; wall: ZonePropId[] } | null;
+  /** A standing table between the two, where there is room for somebody either side. */
+  table: boolean;
 }
 
 const tilesWide = (id: ZonePropId): number => PROPS[id].tilesWide;
@@ -309,80 +318,107 @@ function pack(room: number, priority: readonly ZonePropId[], order: readonly Zon
   return order.filter((id) => chosen.has(id));
 }
 
+const span = (ids: readonly ZonePropId[]) => ids.reduce((sum, id) => sum + tilesWide(id), 0);
+
 /**
  * What a room `contentWidth` tiles wide between corridor and right wall is
- * furnished with. The pantry takes a little under half, the lounge the rest,
- * with a tile between them, each up to its cap. As the room narrows the pantry
- * gives up its water cooler, then the counter, then the standing table, then
- * the fridge, and keeps the coffee machine; the lounge gives up the low table,
- * then the beanbag, then the bookshelf, and keeps the sofa and a plant.
+ * furnished with. Everything stands against the half wall: the pantry's
+ * appliances on the left, then the lounge's shelves, plant, sofa and beanbag,
+ * a tile apart, and each zone is exactly as wide as what it holds. As the room
+ * narrows the pantry gives up its water cooler, then the counter, then the
+ * fridge, and keeps the coffee machine; the lounge gives up the beanbag, then
+ * the bookshelf, then the plant, and keeps the sofa.
  */
 export function fitZones(contentWidth: number): ZoneFit {
-  if (contentWidth < 1) return { pantry: null, lounge: null };
-  const pantryWidth = Math.max(1, Math.min(PANTRY_MAX_WIDTH, Math.floor(contentWidth * 0.45)));
-  const loungeWidth = Math.min(LOUNGE_MAX_WIDTH, contentWidth - pantryWidth - 1);
-  const pantry = {
-    width: pantryWidth,
-    wall: pack(pantryWidth, ["coffee", "fridge", "counter", "water"], ["fridge", "counter", "coffee", "water"]),
-    // A standing table needs a tile either side for whoever stands at it.
-    table: pantryWidth >= 3,
-  };
-  if (loungeWidth < 2) return { pantry, lounge: null };
-  const floor: ZonePropId[] = ["sofa"];
-  if (loungeWidth >= 4) floor.push("beanbag");
-  if (loungeWidth >= 6) floor.splice(1, 0, "lowTable");
-  return {
-    pantry,
-    lounge: { width: loungeWidth, wall: pack(loungeWidth, ["plant", "bookshelf"], ["bookshelf", "plant"]), floor },
-  };
-}
-
-function useSpots(props: readonly ZoneProp[], zone: "pantry" | "lounge", walkY: number): UseSpot[] {
-  const spots: UseSpot[] = [];
-  for (const item of props) {
-    for (const use of PROP_USES[item.id]) {
-      const y = item.y + use.dy;
-      spots.push({
-        x: item.x + use.dx,
-        y,
-        // The row in front of the wall is clear and is its own way in; floor furniture is reached from the walkway.
-        aisleY: use.dy === 1 ? y : walkY,
-        pose: use.pose === "sit" ? "sit" : "stand",
-        facing: use.facing,
-        lift: use.lift,
-        prop: item.id,
-        zone,
-      });
-    }
-  }
-  return spots;
+  if (contentWidth < 1) return { pantry: null, lounge: null, table: false };
+  const pantryRoom = Math.max(1, Math.min(PANTRY_MAX_WIDTH, Math.floor(contentWidth * 0.45)));
+  const pantryWall = pack(pantryRoom, ["coffee", "fridge", "counter", "water"], ["fridge", "counter", "coffee", "water"]);
+  const pantry = { width: span(pantryWall), wall: pantryWall };
+  const loungeRoom = Math.min(LOUNGE_MAX_WIDTH, contentWidth - pantry.width - 1);
+  if (loungeRoom < 2) return { pantry, lounge: null, table: false };
+  const loungeWall = pack(loungeRoom, ["sofa", "plant", "bookshelf", "beanbag"], ["bookshelf", "plant", "sofa", "beanbag"]);
+  const lounge = { width: span(loungeWall), wall: loungeWall };
+  // The table stands in the tile between the zones; whoever uses it stands in the last tile of
+  // the pantry and the first of the lounge, which must not be the rug in front of the sofa.
+  return { pantry, lounge, table: loungeWall[0] !== "sofa" };
 }
 
 function furnish(left: number, top: number, contentWidth: number): Zone[] {
   const fit = fitZones(contentWidth);
   const wallY = top;
-  const floorY = top + 2;
+  const frontY = top + 1;
   const walkY = top + ZONE_ROWS - 1;
-  const zones: Zone[] = [];
-  const row = (ids: readonly ZonePropId[], x: number, y: number, gap = 0): ZoneProp[] => {
+  const row = (ids: readonly ZonePropId[], x: number): ZoneProp[] => {
     const out: ZoneProp[] = [];
     let at = x;
     for (const id of ids) {
-      out.push({ id, x: at, y });
-      at += tilesWide(id) + gap;
+      out.push({ id, x: at, y: wallY });
+      at += tilesWide(id);
     }
     return out;
   };
-  if (fit.pantry) {
-    const props = row(fit.pantry.wall, left, wallY);
-    if (fit.pantry.table) props.push({ id: "table", x: left + 1, y: floorY });
-    zones.push({ kind: "pantry", x: left, y: top, width: fit.pantry.width, height: ZONE_ROWS, props, spots: useSpots(props, "pantry", walkY) });
+  const zones: Zone[] = [];
+  const taken = new Set<string>();
+  const spotsOf = (props: readonly ZoneProp[], zone: "pantry" | "lounge"): UseSpot[] => {
+    const spots: UseSpot[] = [];
+    for (const item of props) {
+      for (const use of PROP_USES[item.id]) {
+        const spot = { x: item.x + use.dx, y: item.y + use.dy };
+        const tile = `${spot.x},${spot.y}`;
+        // One character to a tile, and nobody on the rug: whoever claimed it first has it.
+        if (taken.has(tile)) continue;
+        taken.add(tile);
+        spots.push({
+          ...spot,
+          // Everything is reached from the walkway: a step up to the row in front, two to a seat.
+          aisleY: walkY,
+          pose: use.pose === "sit" ? "sit" : "stand",
+          facing: use.facing,
+          lift: use.lift,
+          prop: item.id,
+          zone,
+        });
+      }
+    }
+    return spots;
+  };
+  if (!fit.pantry) return zones;
+  const pantryProps = row(fit.pantry.wall, left);
+  const loungeLeft = left + fit.pantry.width + 1;
+  const loungeProps = fit.lounge ? row(fit.lounge.wall, loungeLeft) : [];
+  const sofa = loungeProps.find((item) => item.id === "sofa");
+  if (sofa) {
+    // The rug lies in front of the sofa; nobody stands on it.
+    loungeProps.push({ id: "rug", x: sofa.x, y: frontY });
+    taken.add(`${sofa.x},${frontY}`);
+    taken.add(`${sofa.x + 1},${frontY}`);
   }
-  if (fit.lounge && fit.pantry) {
-    const x = left + fit.pantry.width + 1;
-    // Seats stand a tile apart so nobody sits in anybody's lap.
-    const props = [...row(fit.lounge.wall, x, wallY), ...row(fit.lounge.floor, x, floorY, 1)];
-    zones.push({ kind: "lounge", x, y: top, width: fit.lounge.width, height: ZONE_ROWS, props, spots: useSpots(props, "lounge", walkY) });
+  // The table's two places come first, so they win over the spots in front of the wall.
+  const table: ZoneProp | null = fit.table ? { id: "table", x: loungeLeft - 1, y: frontY } : null;
+  const tableSpots = table ? spotsOf([table], "pantry") : [];
+  if (table) taken.add(`${table.x},${table.y}`);
+  zones.push({
+    kind: "pantry",
+    x: left,
+    y: top,
+    width: fit.pantry.width,
+    height: ZONE_ROWS,
+    props: table ? [...pantryProps, table] : pantryProps,
+    spots: [...tableSpots.filter((spot) => spot.x < loungeLeft - 1), ...spotsOf(pantryProps, "pantry")],
+  });
+  if (fit.lounge) {
+    zones.push({
+      kind: "lounge",
+      x: loungeLeft,
+      y: top,
+      width: fit.lounge.width,
+      height: ZONE_ROWS,
+      props: loungeProps,
+      spots: [
+        ...tableSpots.filter((spot) => spot.x >= loungeLeft).map((spot) => ({ ...spot, zone: "lounge" as const })),
+        ...spotsOf(loungeProps, "lounge"),
+      ],
+    });
   }
   return zones;
 }
@@ -395,24 +431,29 @@ function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
     .sort((a, b) => bySeniority(a.agent, b.agent))
     .map((root) => planPod(root, podColumns));
   const left = origin.x + WALL + CORRIDOR;
-  const top = origin.y + WALL + HEADER_HEIGHT;
+  const top = origin.y + WALL + FACE_ROWS;
   const pods: Pod[] = [];
-  // Shelves: pods fill a row left to right in seniority order, then wrap.
+  // Shelves: pods fill a row left to right in seniority order, then wrap. Agents on their own
+  // sit shoulder to shoulder; a crew's pod keeps a tile clear of its neighbours. Shelves follow
+  // one another directly: the aisle row under every desk is the space between them.
   let cursor = { x: left, y: top };
   let shelfHeight = 0;
+  let previous: PodPlan | null = null;
   for (const plan of plans) {
     const podWidth = plan.columns * DESK_WIDTH;
-    if (cursor.x > left && cursor.x + podWidth > left + inner) {
-      cursor = { x: left, y: cursor.y + shelfHeight + GAP };
+    const gap = previous && (previous.columns > 1 || plan.columns > 1) ? GAP : 0;
+    if (cursor.x > left && cursor.x + gap + podWidth > left + inner) {
+      cursor = { x: left, y: cursor.y + shelfHeight };
       shelfHeight = 0;
-    }
+    } else if (cursor.x > left) cursor = { x: cursor.x + gap, y: cursor.y };
     pods.push(placePod(plan, cursor, group.workspaceId));
-    cursor = { x: cursor.x + podWidth + GAP, y: cursor.y };
+    cursor = { x: cursor.x + podWidth, y: cursor.y };
     shelfHeight = Math.max(shelfHeight, plan.rows * DESK_HEIGHT);
+    previous = plan;
   }
   const floorBottom = cursor.y + shelfHeight;
   const dormant = isDormant(group);
-  const stripTop = floorBottom + GAP;
+  const stripTop = floorBottom;
   const rows = dormant ? DORMANT_ROWS : ZONE_ROWS;
   const zones = dormant ? [] : furnish(left, stripTop, inner);
   const lounge: Lounge = {
@@ -421,7 +462,11 @@ function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
     width: width - 2 * WALL,
     height: rows,
     walkway: { x: origin.x + WALL, y: stripTop + rows - 1, width: width - 2 * WALL, height: 1 },
-    wall: zones.length > 0 ? { x: left, y: stripTop, width: inner, height: 1 } : null,
+    // The half wall runs behind the zones only; the rest of the row is open floor.
+    wall:
+      zones.length > 0
+        ? { x: left, y: stripTop, width: (zones.at(-1) as Zone).x + (zones.at(-1) as Zone).width - left, height: 1 }
+        : null,
   };
   const agentCount = pods.reduce(
     (sum, pod) => sum + pod.teams.reduce((inPod, team) => inPod + team.desks.length, 0),
@@ -437,7 +482,9 @@ function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
     y: origin.y,
     width,
     height: lounge.y + lounge.height + WALL - origin.y,
-    header: { x: origin.x + WALL, y: origin.y + WALL, width: width - 2 * WALL, height: HEADER_HEIGHT },
+    // The plate hangs on the top wall, to the right of the doorway.
+    header: { x: origin.x + WALL + CORRIDOR, y: origin.y, width: width - 2 * WALL - CORRIDOR, height: WALL },
+    floorTop: top,
     corridorX: origin.x + WALL,
     door: { x: origin.x + WALL, y: top - 1 },
     pods,
@@ -469,10 +516,11 @@ function oldestRoot(group: CrewGroup): PaseoAgent | null {
 export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOptions): Office {
   const cramped = options.width < MIN_ROOM_WIDTH;
   const width = Math.max(MIN_ROOM_WIDTH, Math.floor(options.width));
-  const fits = Math.max(1, Math.floor((width + GAP) / (ROOM_TARGET_WIDTH + GAP)));
-  const maxColumns = Math.max(1, Math.floor((width + GAP) / (MIN_ROOM_WIDTH + GAP)));
+  // Neighbours share the wall between them, so a room costs its width less that one wall.
+  const fits = Math.max(1, Math.floor((width - WALL) / (ROOM_TARGET_WIDTH - WALL)));
+  const maxColumns = Math.max(1, Math.floor((width - WALL) / (MIN_ROOM_WIDTH - WALL)));
   const columns = Math.min(maxColumns, Math.max(1, Math.floor(options.roomColumns ?? fits)));
-  const roomWidth = Math.floor((width - (columns - 1) * GAP) / columns);
+  const roomWidth = Math.floor((width - WALL) / columns) + WALL;
 
   const ordered = [...groups].sort((a, b) => {
     // Rooms nobody is in go last, so that the rooms in use keep their places among themselves.
@@ -487,16 +535,13 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
   const rooms: Room[] = [];
   const desks = new Map<string, Desk>();
   const roomOf = new Map<string, string>();
-  let y = 0;
-  let rowHeight = 0;
+  // One floor plan: rooms go to the columns in turn and each column stacks its rooms, every
+  // room sharing its side walls with its neighbours and its top wall with the room above.
+  const columnBottom = Array.from({ length: columns }, () => 0);
   ordered.forEach((group, index) => {
     const column = index % columns;
-    if (column === 0 && index > 0) {
-      y += rowHeight + GAP;
-      rowHeight = 0;
-    }
-    const room = layoutRoom(group, { x: column * (roomWidth + GAP), y }, roomWidth);
-    rowHeight = Math.max(rowHeight, room.height);
+    const room = layoutRoom(group, { x: column * (roomWidth - WALL), y: columnBottom[column] as number }, roomWidth);
+    columnBottom[column] = room.y + room.height - WALL;
     rooms.push(room);
     for (const pod of room.pods) {
       for (const team of pod.teams) {
@@ -532,7 +577,8 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
       roomOf.set(guest.agent.id, room.workspaceId);
     });
   });
-  return { width, height: rooms.length > 0 ? y + rowHeight : 0, rooms, desks, roomOf, visitors, cramped };
+  const height = rooms.reduce((bottom, room) => Math.max(bottom, room.y + room.height), 0);
+  return { width, height, rooms, desks, roomOf, visitors, cramped };
 }
 
 export type Activity =

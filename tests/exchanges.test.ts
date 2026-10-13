@@ -78,6 +78,8 @@ describe("toolWord", () => {
       "Plan",
       "Agent",
     ]);
+    // The harness's task notification is not the subagent tool.
+    expect(toolWord("task notification")).toBe("Note");
     expect(toolWord("")).toBe("Tool");
     expect(toolWord("some very long tool name")).toBe("Some");
   });

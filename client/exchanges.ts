@@ -84,7 +84,9 @@ const TOOL_WORDS: ReadonlyArray<[RegExp, string]> = [
   [/^(grep|glob|search|find|ls|toolsearch)\b/, "Find"],
   [/^web|\b(fetch|browser|navigate|screenshot)\b/, "Web"],
   [/\b(send agent prompt|agent message|message)\b/, "Msg"],
-  [/^(task|agent)\b|\b(create agent|subagent)\b/, "Agent"],
+  // The harness's own "task notification" is not a subagent.
+  [/\bnotification\b/, "Note"],
+  [/^(task|agent)$|\b(create agent|subagent)\b/, "Agent"],
   [/^todo|\bplan\b/, "Plan"],
 ];
 

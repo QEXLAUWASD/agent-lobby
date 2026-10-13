@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import { buildForest, groupByWorkspace } from "../client/model";
 import { layoutOffice } from "../client/office-model";
 import {
-  BUBBLE_HEIGHT,
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
-  bubbleBox,
   bubbleTrack,
   characterLabel,
   highlighted,
@@ -264,23 +262,6 @@ describe("markerProgress and linkBetween", () => {
   });
 });
 
-describe("bubbleBox", () => {
-  it("centres over the head and stays inside the office", () => {
-    const middle = bubbleBox({ x: 10, y: 10 }, "hello", 32, 640);
-    expect(middle.left + middle.width / 2).toBeCloseTo(10.5 * 32);
-    expect(middle.top).toBe((10 + 1 - 1.5) * 32 - BUBBLE_HEIGHT - 4);
-    const leftEdge = bubbleBox({ x: 0, y: 10 }, "a rather long line of speech here", 32, 640);
-    expect(leftEdge.left).toBe(2);
-    const rightEdge = bubbleBox({ x: 19, y: 10 }, "a rather long line of speech here", 32, 640);
-    expect(rightEdge.left + rightEdge.width).toBeLessThanOrEqual(638);
-    expect(bubbleBox({ x: 1, y: 0 }, "top row", 32, 640).top).toBe(0);
-    // Narrower than a bubble's natural width: it shrinks to fit.
-    const narrow = bubbleBox({ x: 2, y: 5 }, "x".repeat(48), 16, 144);
-    expect(narrow.width).toBeLessThanOrEqual(140);
-    expect(narrow.left).toBeGreaterThanOrEqual(2);
-  });
-});
-
 describe("bubbleTrack and spotOf", () => {
   const follow = (track: { inputRange: [number, number]; outputRange: [number, number] }, value: number, clampRight = true) => {
     const [a, b] = track.inputRange;
@@ -342,7 +323,8 @@ describe("roomsInView and indexNodes", () => {
     const office = officeOf([agent({ id: "a", workspaceId: "ws-1" }), agent({ id: "b", workspaceId: "ws-2" })]);
     const [first, second] = office.rooms;
     if (!first || !second) throw new Error("fixture");
-    expect(roomsInView(office, 0, first.height)).toEqual(["ws-1"]);
+    // The second room begins on the first one's bottom wall, which they share.
+    expect(roomsInView(office, 0, first.height - 1)).toEqual(["ws-1"]);
     expect(roomsInView(office, first.height - 1, second.y + 1)).toEqual(["ws-1", "ws-2"]);
     expect(roomsInView(office, second.y + 1, second.y + 2)).toEqual(["ws-2"]);
     expect(roomsInView(office, office.height + 5, office.height + 9)).toEqual([]);

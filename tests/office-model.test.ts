@@ -102,7 +102,9 @@ describe("layoutOffice", () => {
       for (const a of rooms) {
         for (const b of rooms) {
           if (a === b) continue;
-          const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+          // Neighbours share a wall, one tile thick, and nothing more.
+          const apart =
+            a.x + a.width - 1 <= b.x || b.x + b.width - 1 <= a.x || a.y + a.height - 1 <= b.y || b.y + b.height - 1 <= a.y;
           expect(apart).toBe(true);
         }
       }
@@ -131,8 +133,8 @@ describe("layoutOffice", () => {
     // Agents on their own take a single desk each.
     expect(room?.pods.filter((entry) => entry.width === DESK_WIDTH).map((entry) => entry.rootId)).toEqual(["solo-1", "solo-2"]);
     const desk = layout.desks.get("meow-a");
-    expect(desk?.seat).toEqual({ x: (desk?.cell.x ?? 0) + 1, y: (desk?.cell.y ?? 0) + 1 });
-    expect(desk?.stand).toEqual({ x: (desk?.cell.x ?? 0) + 2, y: (desk?.cell.y ?? 0) + 1 });
+    expect(desk?.seat).toEqual({ x: (desk?.cell.x ?? 0) + 0.5, y: (desk?.cell.y ?? 0) + 1 });
+    expect(desk?.stand).toEqual({ x: (desk?.cell.x ?? 0) + 1.5, y: (desk?.cell.y ?? 0) + 1 });
     expect(desk?.aisleY).toBe((desk?.cell.y ?? 0) + 2);
   });
 
@@ -227,8 +229,9 @@ describe("layoutOffice", () => {
   it("puts rooms side by side on a wide surface, or stacks them when told to", () => {
     const agents = ["ws-a", "ws-b", "ws-c"].map((workspaceId) => agent({ id: `in-${workspaceId}`, workspaceId }));
     const wide = office(agents, 140);
-    // Seven rooms of the target width fit; they share the width evenly.
-    expect(wide.rooms.map((room) => room.width)).toEqual([19, 19, 19]);
+    // Twelve rooms of the target width fit, each sharing a wall with the next.
+    expect(wide.rooms.map((room) => room.width)).toEqual([12, 12, 12]);
+    expect(wide.rooms.map((room) => room.x)).toEqual([0, 11, 22]);
     expect(new Set(wide.rooms.map((room) => room.y)).size).toBe(1);
     expect(new Set(wide.rooms.map((room) => room.width)).size).toBe(1);
     const stacked = office(agents, 140, 1);
@@ -337,52 +340,66 @@ describe("visitors", () => {
 describe("zones", () => {
   const ids = (list: readonly string[] | undefined) => (list ?? []).join(",");
 
-  it("furnishes less as the room narrows, and never more than a zone's cap", () => {
-    // Content width (between corridor and right wall) for rooms 9, 12, 17 and 40 tiles wide.
+  it("furnishes less as the room narrows, each zone as wide as what it holds", () => {
+    // Content width (between corridor and right wall) for rooms 9, 12 and 30 tiles wide.
     expect(fitZones(6)).toEqual({
-      pantry: { width: 2, wall: ["fridge", "coffee"], table: false },
-      lounge: { width: 3, wall: ["bookshelf", "plant"], floor: ["sofa"] },
+      pantry: { width: 2, wall: ["fridge", "coffee"] },
+      lounge: { width: 3, wall: ["plant", "sofa"] },
+      table: true,
     });
     const twelve = fitZones(9);
     expect(ids(twelve.pantry?.wall)).toBe("fridge,counter,coffee");
-    expect(twelve.pantry?.table).toBe(true);
-    expect(ids(twelve.lounge?.floor)).toBe("sofa,beanbag");
-    const fleet = fitZones(14);
-    expect(ids(fleet.pantry?.wall)).toBe("fridge,counter,coffee,water");
-    expect(ids(fleet.lounge?.floor)).toBe("sofa,lowTable,beanbag");
-    const wide = fitZones(37);
+    expect(ids(twelve.lounge?.wall)).toBe("plant,sofa,beanbag");
+    const wide = fitZones(27);
+    expect(ids(wide.pantry?.wall)).toBe("fridge,counter,coffee,water");
     expect(wide.pantry?.width).toBe(PANTRY_MAX_WIDTH);
+    expect(ids(wide.lounge?.wall)).toBe("bookshelf,plant,sofa,beanbag");
     expect(wide.lounge?.width).toBe(LOUNGE_MAX_WIDTH);
+    // Only a sofa fits beside the pantry: the table would stand on its rug, so there is none.
+    expect(fitZones(4)).toEqual({ pantry: { width: 1, wall: ["coffee"] }, lounge: { width: 2, wall: ["sofa"] }, table: false });
     // Too narrow for a sofa: a coffee machine and nothing else.
-    expect(fitZones(2)).toEqual({ pantry: { width: 1, wall: ["coffee"], table: false }, lounge: null });
-    expect(fitZones(0)).toEqual({ pantry: null, lounge: null });
+    expect(fitZones(2)).toEqual({ pantry: { width: 1, wall: ["coffee"] }, lounge: null, table: false });
+    expect(fitZones(0)).toEqual({ pantry: null, lounge: null, table: false });
   });
 
   it("puts props and use points on free tiles, one character to a point", () => {
-    for (const width of [9, 12, 17, 40]) {
+    const span = (id: string) => (id === "counter" || id === "bookshelf" || id === "sofa" || id === "rug" ? 2 : 1);
+    for (const width of [7, 9, 12, 17, 40]) {
       const room = office([agent({ id: "one", status: "running" })], width, 1).rooms[0];
       if (!room) throw new Error("fixture");
       expect(room.zones.map((zone) => zone.kind)).toEqual(["pantry", "lounge"]);
       const spots = room.zones.flatMap((zone) => zone.spots);
       expect(new Set(spots.map((spot) => `${spot.x},${spot.y}`)).size).toBe(spots.length);
       const covered = new Set<string>();
+      const solid = new Set<string>();
       for (const zone of room.zones) {
         for (const item of zone.props) {
-          for (let dx = 0; dx < (item.id === "counter" || item.id === "bookshelf" || item.id === "sofa" ? 2 : 1); dx += 1) {
+          for (let dx = 0; dx < span(item.id); dx += 1) {
             expect(covered.has(`${item.x + dx},${item.y}`)).toBe(false);
             covered.add(`${item.x + dx},${item.y}`);
-            expect(item.x + dx).toBeLessThan(zone.x + zone.width);
+            if (item.id !== "rug") solid.add(`${item.x + dx},${item.y}`);
+            expect(item.x + dx).toBeLessThan(room.x + room.width - 1);
           }
         }
+        // A zone is exactly as wide as what stands against its wall.
+        const wallProps = zone.props.filter((item) => item.y === zone.y);
+        expect(zone.width).toBe(wallProps.reduce((sum, item) => sum + span(item.id), 0));
       }
-      // Nobody stands on furniture, except to sit on it; the walkway and the corridor stay clear.
       for (const spot of spots) {
+        // Nobody stands on furniture or on the rug; sitting is on the seat itself.
         if (spot.pose === "stand") expect(covered.has(`${spot.x},${spot.y}`)).toBe(false);
+        else expect(solid.has(`${spot.x},${spot.y}`)).toBe(true);
         expect(spot.y).toBeLessThan(room.lounge.walkway.y);
-        expect([spot.y, room.lounge.walkway.y]).toContain(spot.aisleY);
+        expect(spot.aisleY).toBe(room.lounge.walkway.y);
+        expect(spot.x).toBeGreaterThan(room.corridorX);
       }
-      for (const key of covered) expect(Number(key.split(",")[1])).toBeLessThan(room.lounge.walkway.y);
+      // The walkway and the corridor stay clear of furniture.
+      for (const key of covered) {
+        expect(Number(key.split(",")[1])).toBeLessThan(room.lounge.walkway.y);
+        expect(Number(key.split(",")[0])).toBeGreaterThan(room.corridorX);
+      }
       expect(spots.some((spot) => spot.pose === "sit")).toBe(true);
+      expect(room.zones.flatMap((zone) => zone.props).some((item) => item.id === "rug")).toBe(true);
     }
   });
 

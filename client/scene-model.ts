@@ -254,8 +254,6 @@ export function spotOf(activity: Presence["activity"]): Spot {
   return SPOT[activity];
 }
 
-export const BUBBLE_HEIGHT = 20;
-
 export interface Track {
   inputRange: [number, number];
   outputRange: [number, number];
@@ -283,15 +281,6 @@ export function bubbleTrack(
     // top = y - lift, never above the office.
     y: { inputRange: [lift, lift + 1], outputRange: [0, 1] },
   };
-}
-
-/** A bubble's box in pixels: centred over the character's head, kept inside the office. */
-export function bubbleBox(at: Point, text: string, tile: number, officeWidthPx: number): { left: number; top: number; width: number } {
-  const width = Math.min(Math.max(40, Array.from(text).length * 6.5 + 16), Math.min(240, Math.max(40, officeWidthPx - 4)));
-  const centre = (at.x + 0.5) * tile;
-  const left = Math.min(Math.max(2, centre - width / 2), Math.max(2, officeWidthPx - width - 2));
-  const top = Math.max(0, (at.y + 1 - CHARACTER_HEIGHT) * tile - BUBBLE_HEIGHT - 4);
-  return { left, top, width };
 }
 
 /**
