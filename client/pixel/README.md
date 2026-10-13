@@ -16,8 +16,8 @@ is covered by this repository's licence.
 2. `officePalette(theme)` gives one colour per slot. Floor, walls and status colours come from the
    theme; skin, hair and clothing are fixed.
 3. `<Sprite sprite palette scale />` encodes the bitmap as a PNG data URI at device resolution
-   (`scale × ceil(PixelRatio)`) and shows it in one `Image` at `scale` layout pixels per sprite
-   pixel. Encoding at layout size instead blurs on any dense screen.
+   (`round(scale × PixelRatio)` device pixels per art pixel) and shows it in one `Image` at `scale`
+   layout pixels per art pixel. Encoding at layout size instead blurs on any dense screen.
 
 `Sprite` holds no state and never animates. Callers choose the frame; frame 0 of every pose is the
 still to show under reduced motion.
