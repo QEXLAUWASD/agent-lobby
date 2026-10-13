@@ -36,3 +36,11 @@ export function wakeDelay(at: number | null, now: number): number | null {
 export function paneShown(width: number, height: number): boolean {
   return width > 0 && height > 0;
 }
+
+/**
+ * How long a pane has to have had no size before it counts as hidden. A layout
+ * can pass through nothing on its way somewhere (a splitter dragged, a tab
+ * changing); letting go of every subscription for that would cost a reload.
+ * Showing is not delayed.
+ */
+export const HIDE_AFTER_MS = 300;

@@ -52,7 +52,7 @@ import {
   stateColor,
   useReducedMotion,
 } from "./ui";
-import { useDirectory, useWake } from "./use-directory";
+import { useDirectory, useShown, useWake } from "./use-directory";
 import { useFeed } from "./use-feed";
 import { nextWake, paneShown } from "./wake";
 
@@ -76,7 +76,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const paseo = usePaseo();
   const [size, setSize] = useState({ view: 0, height: 0, scene: 0 });
   // The host keeps a pane mounted behind another tab; then nothing here runs.
-  const shown = paneShown(size.view, size.height);
+  const shown = useShown(paneShown(size.view, size.height));
   const directory = useDirectory(paseo, shown);
   // Time moves here only when something drawn depends on it: see `wakeAt`.
   const [turn, setTurn] = useState(0);
