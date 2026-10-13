@@ -16,12 +16,14 @@ import {
   officePalette,
   prop,
   tile as tileBitmap,
+  PROPS,
   TILE as ART_TILE,
   type CharacterPose as ArtPose,
   type EmoteId,
   type Bitmap,
   type Facing,
   type Layer,
+  type TileId,
 } from "./pixel";
 import { CHARACTER_HEIGHT, type Heading, type SpriteRole } from "./scene-model";
 
@@ -81,6 +83,8 @@ export const CharacterSprite = memo(function CharacterSprite({
   pose: wanted,
   heading,
   frame,
+  carry = null,
+  lift = 0,
 }: SpriteProps & {
   /** Decides the look; the same id is always the same person. */
   agentId: string;
@@ -89,16 +93,19 @@ export const CharacterSprite = memo(function CharacterSprite({
   heading: Heading;
   /** A running counter; it wraps at the pose's own frame count. 0 is the still. */
   frame: number;
+  carry?: "cup" | null;
+  /** Art pixels to raise it, so a sitter rests on a seat. */
+  lift?: number;
 }) {
   const scale = artScale(tile);
-  const bitmap = character({ role, look: lookFor(agentId), ...pose(wanted, heading), frame });
+  const bitmap = character({ role, look: lookFor(agentId), ...pose(wanted, heading), frame, carry });
   return (
     <View style={{ width: tile, height: tile * CHARACTER_HEIGHT }}>
       <Sprite
         sprite={bitmap}
         palette={officePalette(theme)}
         scale={scale}
-        style={anchored(bitmap, scale, tile / 2, tile * CHARACTER_HEIGHT)}
+        style={anchored(bitmap, scale, tile / 2, tile * CHARACTER_HEIGHT - lift * scale)}
       />
     </View>
   );
@@ -166,7 +173,7 @@ export const MarkerSprite = memo(function MarkerSprite({ theme, tile }: SpritePr
 });
 
 /**
- * A room's floor, walls, lounge strip and lounge furniture, flattened into one
+ * A room's floor, walls, pantry and lounge with their furniture, flattened into one
  * image. The drawing depends on the room's shape and not on where it stands,
  * so rooms of the same shape share it.
  */
@@ -210,29 +217,48 @@ export const BubbleSprite = memo(function BubbleSprite({
 /** What a room's drawing depends on: its shape and furniture, not where it stands. */
 function roomKey(room: Room): string {
   const headerBottom = room.header.y + room.header.height - room.y;
-  const loungeTop = room.lounge.y - room.y;
-  const spots = room.lounge.spots.map((spot) => `${spot.kind}@${spot.x - room.x},${spot.y - room.y}`).join(";");
-  return `room:${room.width}x${room.height}:h${headerBottom}:l${loungeTop}:${spots}`;
+  const zones = room.zones
+    .map((zone) => `${zone.kind}@${zone.x - room.x},${zone.y - room.y},${zone.width}x${zone.height}:${zone.props.map((item) => `${item.id}@${item.x - room.x},${item.y - room.y}`).join(",")}`)
+    .join(";");
+  return `room:${room.width}x${room.height}:h${headerBottom}:l${room.lounge.y - room.y}:${zones}`;
 }
 
+const inRect = (x: number, y: number, rect: { x: number; y: number; width: number; height: number }) =>
+  x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
+
 function roomBitmap(room: Room, key: string): Bitmap {
-  const headerBottom = room.header.y + room.header.height - room.y;
-  const loungeTop = room.lounge.y - room.y;
+  const headerBottom = room.header.y + room.header.height;
   const layers: Layer[] = [];
-  for (let y = 0; y < room.height; y += 1) {
-    for (let x = 0; x < room.width; x += 1) {
-      const edge = x === 0 || x === room.width - 1 || y === room.height - 1 || y === 0;
-      const id = edge ? "wallCap" : y < headerBottom ? "wall" : y >= loungeTop ? "floorAlt" : "floor";
-      layers.push({ bitmap: tileBitmap(id), x: x * ART_TILE, y: y * ART_TILE });
+  for (let y = room.y; y < room.y + room.height; y += 1) {
+    for (let x = room.x; x < room.x + room.width; x += 1) {
+      const edge = x === room.x || x === room.x + room.width - 1 || y === room.y + room.height - 1 || y === room.y;
+      const zone = room.zones.find((entry) => inRect(x, y, entry));
+      const id: TileId = edge
+        ? "wallCap"
+        : y < headerBottom
+          ? "wall"
+          : room.lounge.wall && zone && y === room.lounge.wall.y
+            ? // The half wall the appliances and shelves stand against.
+              "wall"
+            : zone?.kind === "pantry"
+              ? "kitchen"
+              : zone?.kind === "lounge"
+                ? "carpet"
+                : inRect(x, y, room.lounge)
+                  ? "floorAlt"
+                  : "floor";
+      layers.push({ bitmap: tileBitmap(id), x: (x - room.x) * ART_TILE, y: (y - room.y) * ART_TILE });
     }
   }
-  for (const spot of room.lounge.spots) {
-    // Furniture stands on the bottom centre of its tile.
-    layers.push({
-      bitmap: prop(spot.kind),
-      x: (spot.x - room.x) * ART_TILE + ART_TILE / 2,
-      y: (spot.y - room.y + 1) * ART_TILE,
-    });
+  for (const zone of room.zones) {
+    for (const item of zone.props) {
+      // Furniture stands on the bottom centre of the tiles it covers.
+      layers.push({
+        bitmap: prop(item.id),
+        x: (item.x - room.x) * ART_TILE + (PROPS[item.id].tilesWide * ART_TILE) / 2,
+        y: (item.y - room.y + 1) * ART_TILE,
+      });
+    }
   }
   // `composite` is the one cache of room drawings, bounded by the renderer.
   return composite(key, room.width * ART_TILE, room.height * ART_TILE, layers);

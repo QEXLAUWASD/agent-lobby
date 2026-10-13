@@ -20,13 +20,9 @@ import {
   spriteRole,
   touchSlop,
   MAX_WALK_MS,
-  STROLL_MS_PER_TILE,
   WALK_MS_PER_TILE,
   moveKind,
-  strollPath,
-  strollPause,
   walkPath,
-  wanderCircuit,
 } from "../client/scene-model";
 
 let clock = 0;
@@ -160,33 +156,25 @@ describe("walkPath", () => {
   });
 });
 
-describe("strollPath", () => {
-  it("crosses the lounge across then down, slower than a walk, and pauses between", () => {
-    const legs = strollPath({ x: 3, y: 20 }, { x: 7, y: 21 });
-    expect(legs.map((leg) => [leg.heading, leg.durationMs])).toEqual([
-      ["right", 4 * STROLL_MS_PER_TILE],
-      ["down", STROLL_MS_PER_TILE],
-    ]);
-    expect(STROLL_MS_PER_TILE).toBeGreaterThan(WALK_MS_PER_TILE);
-    expect(strollPath({ x: 3, y: 20 }, { x: 3, y: 20 })).toEqual([]);
-    expect(strollPause(0)).toBeGreaterThanOrEqual(2_000);
-    expect(strollPause(5)).toBe(strollPause(1));
-  });
-});
-
 describe("moveKind", () => {
-  const seated = { spot: "seat" as const, at: { x: 5, y: 4 }, tile: 32 };
+  const seated = { spot: "seat" as const, key: "seat", at: { x: 5, y: 4 }, tile: 32 };
+  const atCoffee = { spot: "lounge" as const, key: "2,0", at: { x: 4, y: 17 }, tile: 32 };
 
   it("walks when the agent changed spot, whatever else moved", () => {
-    expect(moveKind(seated, { spot: "stand", at: { x: 6, y: 4 }, tile: 32 }, true)).toBe("walk");
-    expect(moveKind(seated, { spot: "lounge", at: { x: 9, y: 17 }, tile: 32 }, true)).toBe("walk");
-    expect(moveKind(seated, { spot: "out", at: { x: 1, y: 2 }, tile: 32 }, true)).toBe("walk");
+    expect(moveKind(seated, { spot: "stand", key: "stand", at: { x: 6, y: 4 }, tile: 32 }, true)).toBe("walk");
+    expect(moveKind(seated, atCoffee, true)).toBe("walk");
+    expect(moveKind(seated, { spot: "out", key: "out", at: { x: 1, y: 2 }, tile: 32 }, true)).toBe("walk");
   });
 
-  it("places a character whose room moved under it: same spot, new tile, or a new scale", () => {
-    expect(moveKind(seated, { spot: "seat", at: { x: 5, y: 7 }, tile: 32 }, true)).toBe("snap");
-    expect(moveKind(seated, { spot: "seat", at: { x: 5, y: 4 }, tile: 48 }, true)).toBe("snap");
-    expect(moveKind(seated, { spot: "stand", at: { x: 6, y: 4 }, tile: 16 }, true)).toBe("snap");
+  it("walks from one place of a break to the next", () => {
+    expect(moveKind(atCoffee, { ...atCoffee, key: "7,2", at: { x: 9, y: 19 } }, true)).toBe("walk");
+  });
+
+  it("places a character whose room moved under it: same place, new tile, or a new scale", () => {
+    expect(moveKind(seated, { ...seated, at: { x: 5, y: 7 } }, true)).toBe("snap");
+    expect(moveKind(atCoffee, { ...atCoffee, at: { x: 4, y: 20 } }, true)).toBe("snap");
+    expect(moveKind(seated, { ...seated, tile: 48 }, true)).toBe("snap");
+    expect(moveKind(seated, { spot: "stand", key: "stand", at: { x: 6, y: 4 }, tile: 16 }, true)).toBe("snap");
     expect(moveKind(seated, { ...seated, at: { x: 5, y: 4 } }, true)).toBe("stay");
   });
 
@@ -194,24 +182,7 @@ describe("moveKind", () => {
     expect(moveKind(null, seated, true)).toBe("enter");
     expect(moveKind(null, seated, false)).toBe("snap");
     // Somebody who is out has nowhere to walk in to.
-    expect(moveKind(null, { spot: "out", at: { x: 1, y: 2 }, tile: 32 }, true)).toBe("snap");
-  });
-});
-
-describe("wanderCircuit", () => {
-  it("starts at home, stays in range, and is the same every time", () => {
-    const range = { x: 3, y: 20, width: 14, height: 2 };
-    const stops = wanderCircuit("agent-1", { x: 5, y: 20 }, range);
-    expect(stops).toHaveLength(4);
-    expect(stops[0]).toEqual({ x: 5, y: 20 });
-    for (const stop of stops) {
-      expect(stop.x).toBeGreaterThanOrEqual(3);
-      expect(stop.x).toBeLessThan(17);
-      expect(stop.y).toBeGreaterThanOrEqual(20);
-      expect(stop.y).toBeLessThan(22);
-    }
-    expect(wanderCircuit("agent-1", { x: 5, y: 20 }, range)).toEqual(stops);
-    expect(wanderCircuit("agent-2", { x: 5, y: 20 }, range)).not.toEqual(stops);
+    expect(moveKind(null, { spot: "out", key: "out", at: { x: 1, y: 2 }, tile: 32 }, true)).toBe("snap");
   });
 });
 

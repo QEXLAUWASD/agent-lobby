@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import type { Bubble, Exchange } from "./exchanges";
 import { STATE_LABEL, summary, type CrewNode } from "./model";
-import { DESK_WIDTH, loungeHome, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
+import { DESK_WIDTH, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
 import {
   CHARACTER_HEIGHT,
   MARKER_TRAVEL_MS,
@@ -28,11 +28,8 @@ import {
   roomsInView,
   spotOf,
   spriteRole,
-  strollPath,
-  strollPause,
   touchSlop,
   walkPath,
-  wanderCircuit,
   type Heading,
   type Leg,
   type Place,
@@ -115,8 +112,10 @@ interface CharacterProps {
   presence: Presence;
   /** Where each spot is for this character in the current layout. */
   places: Places;
-  /** Changes when any of `places`, or the range it may stroll, does. */
+  /** Changes when any of `places` does. */
   placesKey: string;
+  /** Which break place the lounge spot is, in the room's own terms. */
+  breakKey: string;
   /** The free column it takes between rows. */
   corridorX: number;
   /** Its room was already drawn when it appeared: it walks in from the door. */
@@ -150,6 +149,7 @@ const Character = memo(
     presence,
     places,
     placesKey,
+    breakKey,
     corridorX,
     enter,
     leaving,
@@ -162,37 +162,37 @@ const Character = memo(
     onPress,
     onGone,
   }: CharacterProps) {
-    const { activity, range } = presence;
+    const { activity } = presence;
     const spot: Spot = leaving ? "out" : spotOf(activity);
-    const strolls = activity === "wandering" && range !== null && !reduced && !leaving;
     const [walking, setWalking] = useState<Heading | null>(null);
     const [row, setRow] = useState(places[spot].at.y);
     // Whether it has reached "out"; until then a leaving character is still drawn.
     const [gone, setGone] = useState(spot === "out");
 
-    const latest = useRef({ places, range, onGone });
-    latest.current = { places, range, onGone };
+    const latest = useRef({ places, onGone });
+    latest.current = { places, onGone };
     // Only how it first appears matters; afterwards its room is always "already there".
     const entered = useRef(enter).current;
     const standing = useRef<Standing | null>(null);
-    const layout = useRef(placesKey);
-    // The last corner it reached, and whether that is open floor (an aisle, the corridor, the lounge).
-    const where = useRef<{ at: Point; open: boolean }>({ at: places[spot].at, open: spot === "lounge" || spot === "out" });
+    // Its desk and its door, which only move when the room does; a break place moving is the agent's doing.
+    const fixedKey = `${places.seat.at.x},${places.seat.at.y}|${places.out.at.x},${places.out.at.y}`;
+    const layout = useRef(fixedKey);
+    // The last corner it reached, and the clear row it leaves that corner by.
+    const where = useRef<Place>(places[spot]);
     // The leg it was on when it was interrupted, so it finishes the stride before turning.
     const stride = useRef<{ leg: Leg; endsAt: number } | null>(null);
 
     useEffect(() => {
       const here = latest.current.places;
       const place = here[spot];
-      const next: Standing = { spot, at: place.at, tile };
+      const next: Standing = { spot, key: spot === "lounge" ? breakKey : spot, at: place.at, tile };
       const previous = standing.current;
       const kind = reduced ? "snap" : moveKind(previous, next, entered);
-      const reflowed = layout.current !== placesKey;
+      const reflowed = layout.current !== fixedKey;
       standing.current = next;
-      layout.current = placesKey;
+      layout.current = fixedKey;
       let cancelled = false;
       let running: Animated.CompositeAnimation | null = null;
-      let pause: ReturnType<typeof setTimeout> | null = null;
 
       const run = (legs: Leg[], done: () => void) => {
         const step = (index: number) => {
@@ -214,34 +214,19 @@ const Character = memo(
           });
           running.start(({ finished }) => {
             if (!finished) return;
-            where.current = { at: leg.to, open: true };
+            where.current = { at: leg.to, aisleY: leg.to.y };
             step(index + 1);
           });
         };
         step(0);
       };
 
-      const stroll = (stop: number, from: Point) => {
-        const area = latest.current.range;
-        if (!strolls || !area) return;
-        pause = setTimeout(() => {
-          const stops = wanderCircuit(agent.id, place.at, area);
-          const to = stops[(stop + 1) % stops.length] as Point;
-          run(strollPath(from, to), () => {
-            setWalking(null);
-            setRow(to.y);
-            stroll(stop + 1, to);
-          });
-        }, strollPause(stop));
-      };
-
       const arrive = () => {
-        where.current = { at: place.at, open: spot === "lounge" || spot === "out" };
+        where.current = place;
         setWalking(null);
         setRow(place.at.y);
         setGone(spot === "out");
         if (leaving) latest.current.onGone(agent.id);
-        else stroll(0, place.at);
       };
 
       if (kind === "snap") {
@@ -252,42 +237,32 @@ const Character = memo(
         setGone(false);
         const legs: Leg[] = [];
         if (kind === "enter") {
-          where.current = { at: here.out.at, open: true };
+          where.current = here.out;
           position.setValue({ x: here.out.at.x * tile, y: here.out.at.y * tile });
         } else if (reflowed && previous) {
           // The room moved while it changes spot: start from where its old spot is now.
           stride.current = null;
-          where.current = { at: here[previous.spot].at, open: previous.spot === "lounge" || previous.spot === "out" };
+          where.current = here[previous.spot];
           position.setValue({ x: where.current.at.x * tile, y: where.current.at.y * tile });
         } else if (stride.current) {
           const { leg, endsAt } = stride.current;
           legs.push({ ...leg, durationMs: Math.max(60, endsAt - Date.now()) });
-          // A stride that ends in its old chair, or beside it, ends at the desk, not on open floor.
+          // A stride that ends where it used to be (in its chair, on the sofa) leaves by that place's own way out.
           const old = previous ? here[previous.spot] : null;
-          const atDesk =
-            old !== null &&
-            (previous?.spot === "seat" || previous?.spot === "stand") &&
-            old.at.x === leg.to.x &&
-            old.at.y === leg.to.y;
-          where.current = { at: leg.to, open: !atDesk };
+          const back = old !== null && old.at.x === leg.to.x && old.at.y === leg.to.y;
+          where.current = back ? old : { at: leg.to, aisleY: leg.to.y };
         }
-        const from = where.current;
-        const fromPlace: Place = {
-          at: from.at,
-          aisleY: from.open ? from.at.y : here[previous?.spot ?? spot].aisleY,
-        };
-        legs.push(...walkPath(fromPlace, place, corridorX));
+        legs.push(...walkPath(where.current, place, corridorX));
         run(legs, arrive);
       }
       return () => {
         cancelled = true;
         running?.stop();
-        if (pause) clearTimeout(pause);
       };
-      // `places` and `range` are read through `placesKey`.
-    }, [agent.id, corridorX, entered, leaving, placesKey, position, reduced, spot, strolls, tile]);
+      // `places` is read through `placesKey`.
+    }, [agent.id, breakKey, corridorX, entered, leaving, placesKey, position, reduced, spot, tile]);
 
-    const pose: CharacterPose = walking ? "walk" : POSE[activity];
+    const pose: CharacterPose = walking ? "walk" : presence.lounging ? "sit" : POSE[activity];
     const frame = useFrame(reduced ? "off" : walking ? "walk" : pose === "type" ? "slow" : "off");
     const emoteFrame = useFrame(!reduced && presence.emote !== null && walking === null ? "slow" : "off");
     const height = tile * CHARACTER_HEIGHT;
@@ -333,6 +308,8 @@ const Character = memo(
             pose={pose}
             heading={walking ?? presence.facing}
             frame={frame}
+            carry={presence.carry}
+            lift={walking ? 0 : presence.lift}
           />
         </Pressable>
         {visiting ? (
@@ -370,6 +347,7 @@ const Character = memo(
     before.tile === after.tile &&
     before.agent === after.agent &&
     before.placesKey === after.placesKey &&
+    before.breakKey === after.breakKey &&
     before.corridorX === after.corridorX &&
     before.leaving === after.leaving &&
     before.position === after.position &&
@@ -383,6 +361,9 @@ const Character = memo(
     before.presence.state === after.presence.state &&
     before.presence.emote === after.presence.emote &&
     before.presence.facing === after.presence.facing &&
+    before.presence.lounging === after.presence.lounging &&
+    before.presence.carry === after.presence.carry &&
+    before.presence.lift === after.presence.lift &&
     before.presence.seated === after.presence.seated,
 );
 
@@ -694,6 +675,7 @@ interface CastMember {
   presence: Presence;
   places: Places;
   placesKey: string;
+  breakKey: string;
   corridorX: number;
   roomId: string;
   visiting: boolean;
@@ -783,20 +765,21 @@ export function OfficeScene({
     const add = (agentId: string, agent: PaseoAgent, room: Room, desk: Desk | null, spot: Point | null) => {
       const presence = presences.get(agentId);
       if (!presence) return;
-      const home = spot ?? (presence.activity === "wandering" ? presence.at : loungeHome(agentId, room.lounge).at);
-      const lounge: Place = { at: home, aisleY: home.y };
+      // On a break it is wherever the break took it; otherwise this spot is only somewhere to have come from.
+      const away = presence.activity === "wandering" || presence.activity === "visiting";
+      const home = spot ?? (away ? presence.at : { x: room.lounge.walkway.x + 1, y: room.lounge.walkway.y });
+      const lounge: Place = { at: home, aisleY: away ? presence.aisleY : home.y };
       const places: Places = {
         seat: desk ? { at: desk.seat, aisleY: desk.aisleY } : lounge,
         stand: desk ? { at: desk.stand, aisleY: desk.aisleY } : lounge,
         lounge,
         out: { at: room.door, aisleY: room.door.y },
       };
-      const { range } = presence;
-      const placesKey = [
-        ...(["seat", "stand", "lounge", "out"] as const).map((name) => `${places[name].at.x},${places[name].at.y},${places[name].aisleY}`),
-        range ? `${range.x},${range.y},${range.width},${range.height}` : "",
-      ].join("|");
-      out.set(agentId, { agentId, agent, presence, places, placesKey, corridorX: room.corridorX, roomId: room.workspaceId, visiting: desk === null });
+      const placesKey = (["seat", "stand", "lounge", "out"] as const)
+        .map((name) => `${places[name].at.x},${places[name].at.y},${places[name].aisleY}`)
+        .join("|");
+      const breakKey = `${home.x - room.x},${home.y - room.lounge.y}`;
+      out.set(agentId, { agentId, agent, presence, places, placesKey, breakKey, corridorX: room.corridorX, roomId: room.workspaceId, visiting: desk === null });
     };
     for (const desk of seated) {
       const node = nodes.get(desk.agentId);
@@ -894,6 +877,7 @@ export function OfficeScene({
                 presence={member.presence}
                 places={member.places}
                 placesKey={member.placesKey}
+                breakKey={member.breakKey}
                 corridorX={member.corridorX}
                 enter={enter}
                 leaving={leaving}

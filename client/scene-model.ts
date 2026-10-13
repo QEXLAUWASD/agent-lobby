@@ -78,15 +78,13 @@ export interface Leg {
 
 /** A walking pace: just under four tiles a second. */
 export const WALK_MS_PER_TILE = 260;
-/** A stroll in the lounge is slower. */
-export const STROLL_MS_PER_TILE = 420;
 /** Past this a walk across a very tall room is hurried, evenly, to end here. */
 export const MAX_WALK_MS = 9_000;
 
 /** Somewhere a character can be, and the free row it leaves or arrives by. */
 export interface Place {
   at: Point;
-  /** A row nothing stands on, next to `at`: the aisle under a desk, or the spot's own row in the lounge. */
+  /** A row nothing stands on, next to `at`: the aisle under a desk, the row in front of the pantry wall, the walkway. */
   aisleY: number;
 }
 
@@ -135,21 +133,17 @@ export function walkPath(from: Place, to: Place, corridorX: number): Leg[] {
   return legs;
 }
 
-/** A stroll between two spots of the lounge, which is open floor: across, then up or down. */
-export function strollPath(from: Point, to: Point): Leg[] {
-  return legsThrough([from, { x: to.x, y: from.y }, to], STROLL_MS_PER_TILE);
-}
-
-/** How long a wanderer stands at its `step`-th stop before moving on. */
-export function strollPause(step: number): number {
-  return 2_400 + (step % 4) * 900;
-}
-
-/** Where a character belongs: in its chair, beside it, in the lounge, or out of the room. */
+/** Where a character belongs: in its chair, beside it, on a break (pantry, lounge, walkway), or out of the room. */
 export type Spot = "seat" | "stand" | "lounge" | "out";
 
 export interface Standing {
   spot: Spot;
+  /**
+   * Which place of that kind, in the room's own terms: the same before and
+   * after the room moves, different when the agent picks another place (a
+   * break that moves from the coffee machine to the sofa).
+   */
+  key: string;
   at: Point;
   /** Pixels per tile. */
   tile: number;
@@ -158,8 +152,9 @@ export interface Standing {
 /**
  * How a character gets to where it now belongs.
  *
- * - `walk`: its spot changed. That is the agent's own doing (it started work,
- *   finished, went idle, closed, came back), so it walks.
+ * - `walk`: its spot changed, or it chose another place of the same kind. That
+ *   is the agent's own doing (it started work, finished, went idle, moved on
+ *   from the pantry to the sofa, closed, came back), so it walks.
  * - `enter`: it was not in the room a moment ago and the room was, so it walks
  *   in from the door.
  * - `snap`: the same spot is somewhere else, or the scale changed. That is the
@@ -176,22 +171,8 @@ export function moveKind(
 ): "stay" | "snap" | "walk" | "enter" {
   if (!previous) return roomWasHere && next.spot !== "out" ? "enter" : "snap";
   if (previous.tile !== next.tile) return "snap";
-  if (previous.spot !== next.spot) return "walk";
+  if (previous.spot !== next.spot || previous.key !== next.key) return "walk";
   return previous.at.x === next.at.x && previous.at.y === next.at.y ? "stay" : "snap";
-}
-
-/** The loop a wanderer walks: its home tile, then three others in its range, the same every time. */
-export function wanderCircuit(agentId: string, home: Point, range: { x: number; y: number; width: number; height: number }): Point[] {
-  let seed = 0;
-  for (let index = 0; index < agentId.length; index += 1) seed = (Math.imul(seed, 31) + agentId.charCodeAt(index)) >>> 0;
-  const stops: Point[] = [home];
-  for (let step = 1; step <= 3; step += 1) {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    const x = range.x + (seed % range.width);
-    const y = range.y + ((seed >>> 16) % range.height);
-    stops.push({ x, y });
-  }
-  return stops;
 }
 
 export interface MarkerPath {

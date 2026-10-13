@@ -7,7 +7,13 @@ import {
   DESK_WIDTH,
   MAX_POD_COLUMNS,
   MIN_ROOM_WIDTH,
+  BREAK_DWELL_MIN_MS,
+  LOUNGE_MAX_WIDTH,
+  PANTRY_MAX_WIDTH,
   WANDER_MS,
+  assignBreaks,
+  breakStretch,
+  fitZones,
   layoutOffice,
   presenceOf,
   presences,
@@ -85,7 +91,12 @@ describe("layoutOffice", () => {
             }
           }
         }
-        for (const spot of room.lounge.spots) expect(inside({ ...spot, width: 1, height: 1 }, room.lounge)).toBe(true);
+        expect(inside(room.lounge.walkway, room.lounge)).toBe(true);
+        for (const zone of room.zones) {
+          expect(inside(zone, room.lounge)).toBe(true);
+          expect(zone.x).toBeGreaterThan(room.corridorX);
+          for (const spot of zone.spots) expect(inside({ ...spot, width: 1, height: 1 }, zone)).toBe(true);
+        }
       }
       const rooms = layout.rooms;
       for (const a of rooms) {
@@ -305,7 +316,8 @@ describe("visitors", () => {
     expect([...layout.visitors.keys()]).toEqual(["overseer", "second-overseer"]);
     const [first, next] = [...layout.visitors.values()];
     expect(first?.at).not.toEqual(next?.at);
-    expect((first?.at.x ?? 0) < (next?.at.x ?? 0)).toBe(true);
+    // From the right wall inwards along the walkway.
+    expect((first?.at.x ?? 0) > (next?.at.x ?? 0)).toBe(true);
   });
 
   it("shows a visitor standing, with the emote of its state", () => {
@@ -322,15 +334,160 @@ describe("visitors", () => {
   });
 });
 
+describe("zones", () => {
+  const ids = (list: readonly string[] | undefined) => (list ?? []).join(",");
+
+  it("furnishes less as the room narrows, and never more than a zone's cap", () => {
+    // Content width (between corridor and right wall) for rooms 9, 12, 17 and 40 tiles wide.
+    expect(fitZones(6)).toEqual({
+      pantry: { width: 2, wall: ["fridge", "coffee"], table: false },
+      lounge: { width: 3, wall: ["bookshelf", "plant"], floor: ["sofa"] },
+    });
+    const twelve = fitZones(9);
+    expect(ids(twelve.pantry?.wall)).toBe("fridge,counter,coffee");
+    expect(twelve.pantry?.table).toBe(true);
+    expect(ids(twelve.lounge?.floor)).toBe("sofa,beanbag");
+    const fleet = fitZones(14);
+    expect(ids(fleet.pantry?.wall)).toBe("fridge,counter,coffee,water");
+    expect(ids(fleet.lounge?.floor)).toBe("sofa,lowTable,beanbag");
+    const wide = fitZones(37);
+    expect(wide.pantry?.width).toBe(PANTRY_MAX_WIDTH);
+    expect(wide.lounge?.width).toBe(LOUNGE_MAX_WIDTH);
+    // Too narrow for a sofa: a coffee machine and nothing else.
+    expect(fitZones(2)).toEqual({ pantry: { width: 1, wall: ["coffee"], table: false }, lounge: null });
+    expect(fitZones(0)).toEqual({ pantry: null, lounge: null });
+  });
+
+  it("puts props and use points on free tiles, one character to a point", () => {
+    for (const width of [9, 12, 17, 40]) {
+      const room = office([agent({ id: "one", status: "running" })], width, 1).rooms[0];
+      if (!room) throw new Error("fixture");
+      expect(room.zones.map((zone) => zone.kind)).toEqual(["pantry", "lounge"]);
+      const spots = room.zones.flatMap((zone) => zone.spots);
+      expect(new Set(spots.map((spot) => `${spot.x},${spot.y}`)).size).toBe(spots.length);
+      const covered = new Set<string>();
+      for (const zone of room.zones) {
+        for (const item of zone.props) {
+          for (let dx = 0; dx < (item.id === "counter" || item.id === "bookshelf" || item.id === "sofa" ? 2 : 1); dx += 1) {
+            expect(covered.has(`${item.x + dx},${item.y}`)).toBe(false);
+            covered.add(`${item.x + dx},${item.y}`);
+            expect(item.x + dx).toBeLessThan(zone.x + zone.width);
+          }
+        }
+      }
+      // Nobody stands on furniture, except to sit on it; the walkway and the corridor stay clear.
+      for (const spot of spots) {
+        if (spot.pose === "stand") expect(covered.has(`${spot.x},${spot.y}`)).toBe(false);
+        expect(spot.y).toBeLessThan(room.lounge.walkway.y);
+        expect([spot.y, room.lounge.walkway.y]).toContain(spot.aisleY);
+      }
+      for (const key of covered) expect(Number(key.split(",")[1])).toBeLessThan(room.lounge.walkway.y);
+      expect(spots.some((spot) => spot.pose === "sit")).toBe(true);
+    }
+  });
+
+  it("never moves a desk: the same forest sits the same with zones and without", () => {
+    const agents = crew();
+    for (const width of [9, 12, 20, 48]) {
+      const furnished = office(agents, width, 1);
+      const bare = office(agents.map((entry) => ({ ...entry, status: "closed" }) as PaseoAgent), width, 1);
+      expect(furnished.rooms[0]?.zones.length).toBe(2);
+      expect(bare.rooms[0]?.zones).toEqual([]);
+      expect(bare.rooms[0]?.dormant).toBe(true);
+      expect(cells(bare)).toEqual(cells(furnished));
+      expect((bare.rooms[0]?.height ?? 0) < (furnished.rooms[0]?.height ?? 0)).toBe(true);
+    }
+  });
+});
+
+describe("assignBreaks", () => {
+  const now = Date.parse("2026-10-13T06:00:00.000Z");
+  const room = office([agent({ id: "host", status: "running" })], 17, 1).rooms[0];
+  if (!room) throw new Error("fixture");
+  const spotCount = room.zones.reduce((sum, zone) => sum + zone.spots.length, 0);
+  const idlers = (count: number) => Array.from({ length: count }, (_, index) => ({ agentId: `idle-${index}`, since: now - 60_000 - index }));
+  const where = (map: Map<string, { x: number; y: number }>) => [...map].map(([id, spot]) => `${id}@${spot.x},${spot.y}`).sort();
+
+  it("gives everybody a point of their own, across both zones", () => {
+    const out = assignBreaks(room, idlers(6), [], now);
+    expect(out.size).toBe(6);
+    expect(new Set([...out.values()].map((spot) => `${spot.x},${spot.y}`)).size).toBe(6);
+    expect(new Set([...out.values()].map((spot) => spot.zone)).size).toBeGreaterThan(1);
+  });
+
+  it("is the same for the same room, people and stretch, whatever order they are given in", () => {
+    const people = idlers(7);
+    const once = where(assignBreaks(room, people, [], now));
+    expect(where(assignBreaks(room, [...people].reverse(), [], now))).toEqual(once);
+    // Five seconds later nobody has moved.
+    expect(where(assignBreaks(room, people, [], now + 5_000))).toEqual(once);
+  });
+
+  it("moves people on between stretches, not all at the same moment", () => {
+    const people = idlers(5);
+    const places = (at: number) => assignBreaks(room, people, [], at);
+    const moves = new Map<string, number[]>();
+    let previous = places(now);
+    for (let minute = 1; minute <= 30; minute += 1) {
+      const current = places(now + minute * 60_000);
+      for (const { agentId } of people) {
+        const a = previous.get(agentId);
+        const b = current.get(agentId);
+        if (a && b && (a.x !== b.x || a.y !== b.y)) moves.set(agentId, [...(moves.get(agentId) ?? []), minute]);
+      }
+      previous = current;
+    }
+    // Everybody moved at least once in half an hour, and nobody every minute.
+    for (const { agentId } of people) {
+      expect((moves.get(agentId) ?? []).length).toBeGreaterThan(0);
+      expect((moves.get(agentId) ?? []).length).toBeLessThanOrEqual(30 / (BREAK_DWELL_MIN_MS / 60_000) + 1);
+    }
+    expect(new Set([...moves.values()].map((minutes) => minutes[0])).size).toBeGreaterThan(1);
+    expect(breakStretch("idle-0", now)).toEqual(breakStretch("idle-0", now + 1_000));
+    const stretch = breakStretch("idle-0", now);
+    expect(stretch.startedAt).toBeLessThanOrEqual(now);
+    expect(breakStretch("idle-0", stretch.startedAt - 1).index).toBe(stretch.index - 1);
+  });
+
+  it("sends the overflow to the walkway, and leaves out whoever does not fit even there", () => {
+    const walkwayTiles = room.lounge.walkway.width - 1;
+    const crowd = idlers(spotCount + walkwayTiles + 5);
+    const out = assignBreaks(room, crowd, [], now);
+    expect(out.size).toBe(spotCount + walkwayTiles);
+    const zones = [...out.values()].map((spot) => spot.zone);
+    expect(zones.filter((zone) => zone === "walkway")).toHaveLength(walkwayTiles);
+    expect(new Set([...out.values()].map((spot) => `${spot.x},${spot.y}`)).size).toBe(out.size);
+    // Whoever is left out sleeps at the desk; it is never somebody who already had a place.
+    // The foot of the corridor is nobody's place.
+    expect([...out.values()].some((spot) => spot.x === room.corridorX)).toBe(false);
+  });
+
+  it("keeps off a tile a visitor stands on", () => {
+    const tile = { x: room.lounge.walkway.x + room.lounge.walkway.width - 1, y: room.lounge.walkway.y };
+    const out = assignBreaks(room, idlers(spotCount + 40), [tile], now);
+    expect([...out.values()].some((spot) => spot.x === tile.x && spot.y === tile.y)).toBe(false);
+  });
+
+  it("does not unseat anyone when somebody else goes idle later", () => {
+    const first = assignBreaks(room, idlers(4), [], now);
+    const later = assignBreaks(room, [...idlers(4), { agentId: "latecomer", since: now - 1_000 }], [], now);
+    for (const [id, spot] of first) expect(later.get(id)).toEqual(spot);
+    expect(later.has("latecomer")).toBe(true);
+  });
+});
+
 describe("presenceOf", () => {
   const now = Date.parse("2026-10-13T06:00:00.000Z");
   const recent = new Date(now - 60_000).toISOString();
   const subject = agent({ id: "subject", updatedAt: recent });
-  const layout = office([subject], 30);
+  const layout = office([subject, agent({ id: "other", status: "running" })], 30, 1);
   const desk = layout.desks.get("subject");
-  const lounge = layout.rooms[0]?.lounge ?? null;
-  if (!desk || !lounge) throw new Error("fixture");
-  const at = (state: CrewState, who: PaseoAgent = subject) => presenceOf(who, state, desk, lounge, now);
+  const room = layout.rooms[0];
+  if (!desk || !room) throw new Error("fixture");
+  const sofa = room.zones.flatMap((zone) => zone.spots).find((spot) => spot.prop === "sofa");
+  const table = room.zones.flatMap((zone) => zone.spots).find((spot) => spot.prop === "table");
+  if (!sofa || !table) throw new Error("fixture");
+  const at = (state: CrewState, who: PaseoAgent = subject, spot = sofa) => presenceOf(who, state, desk, spot, now);
 
   it("maps each state to a place and an activity", () => {
     expect(at("working")).toMatchObject({ activity: "typing", at: desk.seat, facing: "up", seated: true, screenOn: true, emote: null, visible: true });
@@ -340,17 +497,24 @@ describe("presenceOf", () => {
     expect(at("closed")).toMatchObject({ activity: "away", visible: false, screenOn: false, emote: null });
   });
 
-  it("lets a recently idle agent wander the lounge and sends a long-idle one to sleep at its desk", () => {
-    const wandering = at("idle");
-    expect(wandering).toMatchObject({ activity: "wandering", seated: false, screenOn: false });
-    expect(wandering.range && inside(wandering.range, lounge)).toBe(true);
-    expect(wandering.range && inside({ ...wandering.at, width: 1, height: 1 }, wandering.range)).toBe(true);
-    // Nobody stands on the furniture row.
-    expect(wandering.at.y).toBeLessThan(lounge.y + lounge.height - 1);
-    expect(at("idle")).toEqual(wandering);
+  it("takes a recently idle agent to its break place, as that place is used", () => {
+    expect(at("idle")).toMatchObject({
+      activity: "wandering",
+      at: { x: sofa.x, y: sofa.y },
+      aisleY: room.lounge.walkway.y,
+      lounging: true,
+      lift: sofa.lift,
+      facing: "down",
+      seated: false,
+      screenOn: false,
+      carry: null,
+    });
+    expect(at("idle", subject, table)).toMatchObject({ lounging: false, carry: "cup", facing: table.facing, lift: 0 });
+  });
 
+  it("sends a long-idle agent, or one with nowhere to go, to sleep at its desk", () => {
     const stale = { ...subject, updatedAt: new Date(now - WANDER_MS).toISOString() } as PaseoAgent;
-    expect(at("idle", stale)).toMatchObject({ activity: "asleep", at: desk.seat, seated: true, emote: "zzz", range: null });
+    expect(at("idle", stale)).toMatchObject({ activity: "asleep", at: desk.seat, seated: true, emote: "zzz", lounging: false });
     const unreadable = { ...subject, updatedAt: "never" } as PaseoAgent;
     expect(at("idle", unreadable).activity).toBe("asleep");
     expect(presenceOf(subject, "idle", desk, null, now).activity).toBe("asleep");
@@ -363,23 +527,27 @@ describe("presenceOf", () => {
 });
 
 describe("presences", () => {
-  it("covers every seated agent with the lounge of its own room", () => {
+  it("gives every idle agent on a break a place of its own in its own room", () => {
     const now = Date.parse("2026-10-13T06:00:00.000Z");
     const fresh = new Date(now - 1_000).toISOString();
     const agents = [
-      agent({ id: "a", workspaceId: "ws-a", updatedAt: fresh }),
+      ...Array.from({ length: 5 }, (_, index) => agent({ id: `a${index}`, workspaceId: "ws-a", updatedAt: fresh })),
       agent({ id: "b", workspaceId: "ws-b", updatedAt: fresh }),
       agent({ id: "busy", workspaceId: "ws-b", status: "running" }),
     ];
-    const layout = office(agents, 30);
+    const layout = office(agents, 30, 1);
     const map = presences(layout, new Map(agents.map((entry) => [entry.id, entry])), crewState, now);
-    expect(map.size).toBe(3);
+    expect(map.size).toBe(7);
     expect(map.get("busy")?.activity).toBe("typing");
-    for (const id of ["a", "b"]) {
+    const tiles = new Set<string>();
+    for (const id of ["a0", "a1", "a2", "a3", "a4", "b"]) {
+      const presence = map.get(id);
       const room = layout.rooms.find((entry) => entry.workspaceId === layout.roomOf.get(id));
-      const range = map.get(id)?.range;
-      expect(room && range && inside(range, room.lounge)).toBe(true);
+      expect(presence?.activity).toBe("wandering");
+      expect(room && presence && inside({ ...presence.at, width: 1, height: 1 }, room.lounge)).toBe(true);
+      tiles.add(`${presence?.at.x},${presence?.at.y}`);
     }
+    expect(tiles.size).toBe(6);
   });
 });
 
