@@ -167,6 +167,31 @@ function draw({ style, lines, width, height, tailX }: Plan): Canvas {
 export const BUBBLE_MAX_CACHED = 256;
 const cache = new Lru<Bitmap>(BUBBLE_MAX_CACHED);
 
+const TAG_HEIGHT = heightOf(1) - TAIL_HEIGHT;
+
+/** A small plate with a few characters on it, such as a count. No tail; anchored bottom centre. */
+export function tag(text: string): Bitmap {
+  const label = wrapText(text, BUBBLE_MAX_WIDTH, 1)[0] ?? "";
+  const width = 2 + 2 * PAD_X + textWidth(label);
+  const key = `g:${label}`;
+  let bitmap = cache.get(key);
+  if (!bitmap) {
+    const out = canvas(width, TAG_HEIGHT);
+    const [outline, fill] = [slotIndex("outline"), slotIndex("white")];
+    for (let y = 0; y < TAG_HEIGHT; y++) {
+      for (let x = 0; x < width; x++) {
+        const edge = x === 0 || y === 0 || x === width - 1 || y === TAG_HEIGHT - 1;
+        out.pixels[y * width + x] = edge ? outline : fill;
+      }
+    }
+    stampText(out.pixels, width, label, 1 + PAD_X, 1 + PAD_TOP, outline);
+    bitmap = { key, anchor: { x: Math.floor(width / 2), y: TAG_HEIGHT }, ...out };
+    cache.set(key, bitmap);
+  }
+  return bitmap;
+}
+
+
 /** The bubble for `spec`. Its anchor is the tip of the tail. */
 export function bubble(spec: BubbleSpec): Bitmap {
   const planned = plan(spec);

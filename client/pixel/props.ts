@@ -58,7 +58,9 @@ export type PropId =
   | "beanbag"
   | "rug"
   | "screenH"
-  | "screenV";
+  | "screenV"
+  | "stool"
+  | "archive";
 export type TileId =
   | "floor"
   | "floorAlt"
@@ -469,6 +471,62 @@ const SCREEN_H_ROWS = [
 ];
 const SCREEN_V_ROWS = ["oooo", ...Array.from({ length: 14 }, () => "onmo"), "oooo", ...Array.from({ length: 5 }, () => "ofFo"), "oooo"];
 
+/** A bar stool. The sitter is lifted clear of the floor, so its legs and footrest show below. */
+const STOOL_ROWS = [
+  "....oooooooo....",
+  "...offffffffo...",
+  "...oFFFFFFFFo...",
+  "....oooooooo....",
+  "....oMo..oMo....",
+  "....oMo..oMo....",
+  "...oMMooooMMo...",
+  "...oMooooooMo...",
+  "...oMo....oMo...",
+  "...oMo....oMo...",
+  "..oMo......oMo..",
+  "..oMo......oMo..",
+  "..ooo......ooo..",
+];
+
+/**
+ * Where the files of agents who have left are kept: a three-drawer cabinet. `level` 1 to 3 labels
+ * that many drawers from the top; 4 also puts a box on the cabinet. Six empty rows are kept above
+ * for the box, so every level has one size.
+ */
+export const ARCHIVE_LEVELS = 5;
+function archiveRows(level: number): string[] {
+  const box = [
+    "....oooooooo....",
+    "...odllllllDo...",
+    "...oddwwwddDo...",
+    "...oddddddDDo...",
+    "...oddddddDDo...",
+    "...oooooooooo...",
+  ];
+  const drawer = (labelled: boolean) => [
+    "..onnnnnnnnnmo..",
+    labelled ? "..onnwwwwwnnmo.." : "..onnnnnnnnnmo..",
+    labelled ? "..onnwMMMwnnmo.." : "..onnnnnnnnnmo..",
+    "..onnnnMMnnnmo..",
+    "..onnnnnnnnnmo..",
+    "..oooooooooooo..",
+  ];
+  return [
+    ...(level >= 4 ? box : Array.from({ length: 6 }, () => "................")),
+    "..oooooooooooo..",
+    "..ommmmmmmmmmo..",
+    "..oooooooooooo..",
+    ...[1, 2, 3].flatMap((nth) => drawer(level >= nth)),
+    "..oMMMMMMMMMMo..",
+    "..oooooooooooo..",
+  ];
+}
+
+/** A fill level for a count of closed agents: none, a couple, a few, many, overflowing. */
+export function archiveLevel(count: number): number {
+  return count <= 0 ? 0 : count <= 2 ? 1 : count <= 9 ? 2 : count <= 29 ? 3 : 4;
+}
+
 const FLOOR_ROWS = [...Array.from({ length: 15 }, () => row(["1", 15], "3")), row(["3", 16])];
 const FLOOR_ALT_ROWS = FLOOR_ROWS.map((line) => line.replace(/1/g, "2"));
 const WALL_ROWS = [
@@ -508,10 +566,13 @@ export interface PropInfo {
 
 /** Where a character goes to use a prop, so the layout and the art agree on one table. */
 export interface UsePoint {
-  /** Tiles from the prop's leftmost tile; `dy` 1 is the tile in front of it. */
+  /**
+   * Tiles from the prop's leftmost tile; `dy` 1 is the tile in front of it. Whole numbers, except
+   * that lying on the sofa is centred between its two tiles.
+   */
   readonly dx: number;
   readonly dy: number;
-  readonly pose: "idle" | "sit";
+  readonly pose: "idle" | "sit" | "lie";
   readonly facing: "up" | "down" | "left" | "right";
   /** Art pixels to raise the character so it sits on the seat instead of the floor. */
   readonly lift: number;
@@ -538,7 +599,10 @@ export const PROP_USES: Readonly<Record<PropId, readonly UsePoint[]>> = {
   rug: [],
   screenH: [],
   screenV: [],
-  sofa: [use(0, 0, "sit", "down", 4), use(1, 0, "sit", "down", 4)],
+  stool: [use(0, 0, "sit", "up", 6)],
+  archive: [],
+  // Lying takes the whole sofa: use it only when nobody is sitting there.
+  sofa: [use(0, 0, "sit", "down", 4), use(1, 0, "sit", "down", 4), use(0.5, 0, "lie", "down", 5)],
   beanbag: [use(0, 0, "sit", "down", 3)],
   coffee: [use(0, 1, "idle", "up")],
   water: [use(0, 1, "idle", "up")],
@@ -577,9 +641,11 @@ export const PROPS: Readonly<Record<PropId, PropInfo>> = {
   rug: info(RUG_ROWS, 2),
   screenH: info(SCREEN_H_ROWS, 1),
   screenV: info(SCREEN_V_ROWS, 1),
+  stool: info(STOOL_ROWS, 1),
+  archive: info(archiveRows(0), 1),
 };
 
-const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk">, readonly string[]>> = {
+const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk" | "archive">, readonly string[]>> = {
   chair: CHAIR_ROWS,
   plant: PLANT_ROWS,
   coffee: COFFEE_ROWS,
@@ -595,6 +661,7 @@ const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk">, readonly string[]>> 
   rug: RUG_ROWS,
   screenH: SCREEN_H_ROWS,
   screenV: SCREEN_V_ROWS,
+  stool: STOOL_ROWS,
 };
 const TILE_ROWS: Readonly<Partial<Record<TileId, readonly string[]>>> = {
   floor: FLOOR_ROWS,
@@ -651,9 +718,15 @@ export interface PropOptions {
   readonly screen?: ScreenState;
   /** Desk only: a lit screen has two frames. Wraps. */
   readonly frame?: number;
+  /** Archive only: how full it is, 0 to 4. See `archiveLevel`. */
+  readonly level?: number;
 }
 
 export function prop(id: PropId, options: PropOptions = {}): Bitmap {
+  if (id === "archive") {
+    const level = Math.min(ARCHIVE_LEVELS - 1, Math.max(0, Math.floor(options.level ?? 0)));
+    return cached(`p:archive:${level}`, PROPS.archive.anchor, () => paint(archiveRows(level), PROP_LEGEND));
+  }
   if (id !== "desk") return cached(`p:${id}`, PROPS[id].anchor, () => paint(STATIC_ROWS[id], PROP_LEGEND));
   const screen = options.screen ?? "off";
   const frames = SCREENS[screen].length;

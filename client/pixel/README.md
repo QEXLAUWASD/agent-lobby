@@ -28,7 +28,8 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 
 | Sprite | Size | Anchor | Frames |
 | --- | --- | --- | --- |
-| character | 16 × 24 | 8, 24 (under the feet) | idle 2, walk 4, sit 2, sleep 2 |
+| character | 16 × 24 | 8, 24 (under the feet) | idle 2, walk 4, sit 2, sleep 2, drink 2, talk 2, stretch 2, doze 2 |
+| character, pose `lie` | 24 × 16 | 12, 16 | 2 |
 | desk | 32 × 28 | 16, 28; the monitor is the top 12 rows | lit 2, off 1, error 1 |
 | chair | 16 × 16 | 8, 16 | 1 |
 | plant, coffee, water | 16 × 19 to 22 | bottom centre | 1 |
@@ -42,6 +43,9 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | lowTable | 16 × 7 | bottom centre | 1 |
 | beanbag | 16 × 12 | bottom centre | 1 |
 | rug (flat, drawn right after the floor) | 32 × 16 | bottom centre | 1 |
+| stool | 16 × 13 | bottom centre | 1 |
+| archive | 16 × 29 | bottom centre | levels 0 to 4, via `level` |
+| tag(text) | text width + 6 × 12 | bottom centre | 1 |
 | screenH | 16 × 10 | bottom centre | 1 |
 | screenV | 4 × 22 | bottom centre | 1 |
 | every `tile(id)` and `wallTop(joins)` | 16 × 16 | 0, 0 | 1 |
@@ -99,14 +103,38 @@ raise a sitter so it rests on the seat. A sitter shares the prop's tile and is d
 
 | Prop | Use points |
 | --- | --- |
-| sofa | both tiles: sit, facing down, lift 4 |
+| sofa | both tiles: sit, facing down, lift 4; or one sleeper lying across both, centred, lift 5 |
+| stool | its tile: sit, facing up or down, lift 6 |
 | beanbag | its tile: sit, facing down, lift 3 |
 | coffee, water, fridge | the tile in front: stand, facing up |
 | counter, bookshelf | the two tiles in front: stand, facing up |
 | table | the tile either side: stand, facing the table |
 | plant, lowTable, rug | none; scenery |
 
-`character({ carry: "cup" })` puts a cup in the hand in any pose seen from the front or side.
+`character({ carry: "cup" })` puts a cup in the hand in any pose seen from the front or side, and
+`carry: "book"` an open book.
+
+## Activities
+
+Poses for agents with nothing to do. Frame 0 is the still; frame 1 is the action.
+
+| Pose | Facings | Frame 1 |
+| --- | --- | --- |
+| drink | down, left, right | lifts the cup to the mouth (the cup comes with the pose) |
+| talk | down, left, right; up only bobs | opens the mouth and moves a hand |
+| stretch | down, up | both arms up past the head |
+| doze | down | seated, eyes shut, the head nods |
+| lie | none | asleep on its side, 24 × 16; for the sofa |
+
+Left is always the mirror of right.
+
+## Closed agents
+
+`prop("archive", { level })` is a three-drawer filing cabinet standing for the agents who have left
+a room. `archiveLevel(count)` turns a count into a level: 0 for none, then 1 to 2, 3 to 9, 10 to 29
+and 30 or more. Each level labels one more drawer from the top, and the last puts a box on the
+cabinet. `tag(text)` is a small plate in the bubble font for the count itself; draw it at the
+bubble scale.
 
 ## Speech bubbles and the font
 

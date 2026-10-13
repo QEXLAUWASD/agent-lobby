@@ -17,6 +17,7 @@ import {
   bubbleScale,
   bubbleSize,
   bubbleWidth,
+  tag,
   type BubbleTone,
 } from "../client/pixel/bubble";
 import { contrast, luminance, mix, parseColor } from "../client/pixel/color";
@@ -26,7 +27,7 @@ import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "..
 import { Lru } from "../client/pixel/lru";
 import { SLOTS, lookFor, officePalette, paletteColor, slotIndex } from "../client/pixel/palette";
 import { adler32, crc32, deflate, encodeIndexedPng, pngDataUri, toBase64, upscale, type Rgba } from "../client/pixel/png";
-import { PROPS, PROP_USES, TILE, door, prop, tile, wallTop, wallTopAt } from "../client/pixel/props";
+import { PROPS, PROP_USES, TILE, archiveLevel, door, prop, tile, wallTop, wallTopAt } from "../client/pixel/props";
 import type { PropId, ScreenState, TileId } from "../client/pixel/props";
 import { crispScale, devicePixels, snap } from "../client/pixel/scale";
 import { fitText, foldText, textWidth, wrapText } from "../client/pixel/text";
@@ -63,7 +64,7 @@ const DARK: PluginTheme = {
 };
 
 const ROLES: CharacterRole[] = ["overseer", "nexus", "meow", "agent"];
-const POSES: CharacterPose[] = ["idle", "walk", "sit", "sleep"];
+const POSES: CharacterPose[] = ["idle", "walk", "sit", "sleep", "drink", "talk", "stretch", "doze", "lie"];
 const FACINGS: Facing[] = ["down", "up", "left", "right"];
 const EMOTES: EmoteId[] = ["alert", "question", "fail", "check", "zzz", "thinking"];
 const PROP_IDS: PropId[] = [
@@ -83,6 +84,8 @@ const PROP_IDS: PropId[] = [
   "rug",
   "screenH",
   "screenV",
+  "stool",
+  "archive",
 ];
 const TILE_IDS: TileId[] = [
   "floor",
@@ -255,11 +258,16 @@ describe("characters", () => {
         for (const facing of FACINGS) {
           for (let frame = 0; frame < CHARACTER_FRAMES[pose]; frame++) {
             const sprite = character({ role, look: LOOK, pose, facing, frame });
-            expect(sprite.width).toBe(CHARACTER_WIDTH);
-            expect(sprite.height).toBe(CHARACTER_HEIGHT);
-            expect(sprite.anchor).toEqual({ x: 8, y: 24 });
-            // Feet, or the chair they sit on, reach the bottom row.
-            expect(opaque(sprite).slice(-CHARACTER_WIDTH).some(Boolean)).toBe(true);
+            // Lying down is the one pose drawn sideways.
+            const [width, height] = pose === "lie" ? [24, 16] : [CHARACTER_WIDTH, CHARACTER_HEIGHT];
+            expect([sprite.width, sprite.height]).toEqual([width, height]);
+            expect(sprite.anchor).toEqual({ x: width / 2, y: height });
+            // Feet, or the chair they sit on, reach the bottom row; lying, they reach the right edge.
+            const reach =
+              pose === "lie"
+                ? Array.from({ length: height }, (_, y) => sprite.pixels[y * width + width - 1]!)
+                : [...sprite.pixels.slice(-width)];
+            expect(reach.some(Boolean)).toBe(true);
           }
         }
       }
@@ -319,6 +327,51 @@ describe("characters", () => {
     );
   });
 
+  it("acts on the second frame of each activity", () => {
+    const frames = (pose: CharacterPose, facing: Facing) =>
+      [0, 1].map((frame) => character({ role: "agent", look: LOOK, pose, facing, frame }));
+    for (const [pose, facing, least] of [
+      ["drink", "down", 10],
+      ["drink", "right", 10],
+      ["talk", "down", 4],
+      ["talk", "left", 4],
+      ["stretch", "down", 30],
+      ["stretch", "up", 30],
+      ["doze", "down", 8],
+      ["lie", "down", 4],
+    ] as const) {
+      const [still, moving] = frames(pose, facing);
+      expect(difference([...still!.pixels], [...moving!.pixels]), `${pose} ${facing}`).toBeGreaterThanOrEqual(least);
+    }
+    // Stretching reaches above where the standing figure ends.
+    const reach = (bitmap: Bitmap) => opaque(bitmap).slice(0, 16 * 7).filter((value, index) => value && (index % 16 < 3 || index % 16 > 12)).length;
+    expect(reach(frames("stretch", "down")[1]!)).toBeGreaterThan(reach(frames("stretch", "down")[0]!) + 6);
+    // Drinking carries the cup without being told to.
+    expect(frames("drink", "down")[0]!.pixels).toEqual(character({ role: "agent", look: LOOK, carry: "cup" }).pixels);
+  });
+
+  it("shuts the eyes to doze and to lie down", () => {
+    const eye = slotIndex("outline");
+    const awake = character({ role: "agent", look: LOOK, pose: "sit", facing: "down" });
+    const dozing = character({ role: "agent", look: LOOK, pose: "doze" });
+    expect(difference([...awake.pixels], [...dozing.pixels])).toBeGreaterThan(6);
+    // A lying figure is a standing one turned a quarter turn: same number of drawn pixels, bar the eyes.
+    const lying = character({ role: "meow", look: LOOK, pose: "lie" });
+    const standing = character({ role: "meow", look: LOOK });
+    const drawn = (bitmap: Bitmap) => opaque(bitmap).filter(Boolean).length;
+    expect(drawn(lying)).toBe(drawn(standing));
+    expect([...lying.pixels].filter((value) => value === eye).length).not.toBe(0);
+  });
+
+  it("holds a book from the front only", () => {
+    const empty = character({ role: "agent", look: LOOK, pose: "sit", facing: "down" });
+    const reading = character({ role: "agent", look: LOOK, pose: "sit", facing: "down", carry: "book" });
+    expect(difference([...empty.pixels], [...reading.pixels])).toBeGreaterThanOrEqual(12);
+    expect(character({ role: "agent", look: LOOK, facing: "up", carry: "book" }).pixels).toEqual(
+      character({ role: "agent", look: LOOK, facing: "up" }).pixels,
+    );
+  });
+
   it("shows a different person for a different look", () => {
     const one = character({ role: "meow", look: { skin: 0, hair: 0, hairStyle: 0, shirt: 0, pants: 0 } });
     const other = character({ role: "meow", look: { skin: 3, hair: 4, hairStyle: 1, shirt: 5, pants: 2 } });
@@ -355,18 +408,36 @@ describe("props, tiles and emotes", () => {
     expect(prop("desk", { screen: "off", frame: 3 })).toBe(prop("desk"));
   });
 
+  it("fills the archive by level, in shape", () => {
+    const labels = (level: number) => [...prop("archive", { level }).pixels].filter((value) => value === slotIndex("white")).length;
+    const sizes = [0, 1, 2, 3, 4].map((level) => prop("archive", { level }));
+    for (const drawn of sizes) expect([drawn.width, drawn.height]).toEqual([PROPS.archive.width, PROPS.archive.height]);
+    expect(labels(0)).toBe(0);
+    expect(labels(1)).toBeGreaterThan(0);
+    expect(labels(2)).toBeGreaterThan(labels(1));
+    expect(labels(3)).toBeGreaterThan(labels(2));
+    // The box on top is the only thing in the upper six rows.
+    const top = (level: number) => opaque(prop("archive", { level })).slice(0, 16 * 6).some(Boolean);
+    expect([top(3), top(4)]).toEqual([false, true]);
+    expect(prop("archive", { level: 99 })).toBe(prop("archive", { level: 4 }));
+    expect(prop("archive")).toBe(prop("archive", { level: 0 }));
+    expect([0, 1, 2, 3, 9, 10, 29, 30, 500].map(archiveLevel)).toEqual([0, 1, 1, 2, 2, 3, 3, 4, 4]);
+  });
+
   it("lists use points that fit each prop", () => {
     for (const id of PROP_IDS) {
       const seats = PROP_USES[id].filter((point) => point.dy === 0 && point.pose === "sit");
       for (const point of PROP_USES[id]) {
-        expect(Number.isInteger(point.dx) && Number.isInteger(point.dy), id).toBe(true);
+        // Lying on the sofa is centred between its tiles; every other point is on a tile.
+        expect(Number.isInteger(point.pose === "lie" ? point.dx * 2 : point.dx) && Number.isInteger(point.dy), id).toBe(true);
         // Seats are on the prop, and low enough that the sitter's feet stay inside its height.
-        if (point.pose === "sit") expect(point.dx >= 0 && point.dx < PROPS[id].tilesWide && point.dy === 0, id).toBe(true);
+        if (point.pose !== "idle") expect(point.dx >= 0 && point.dx < PROPS[id].tilesWide && point.dy === 0, id).toBe(true);
         expect(point.lift, id).toBeLessThan(PROPS[id].height);
       }
       expect(seats.length, id).toBeLessThanOrEqual(PROPS[id].tilesWide);
     }
-    expect(PROP_USES.sofa).toHaveLength(2);
+    expect(PROP_USES.sofa.map((point) => point.pose)).toEqual(["sit", "sit", "lie"]);
+    expect(PROP_USES.stool[0]!.lift).toBeGreaterThanOrEqual(5);
     expect(new Set(PROP_USES.table.map((point) => point.facing))).toEqual(new Set(["left", "right"]));
   });
 
@@ -747,6 +818,16 @@ describe("bubbles", () => {
     expect(plain.pixels).not.toEqual(bubble({ text: "Lol", tone: "say" }).pixels);
     expect(bubble({ text: "", tone: "say" }).width).toBe(9);
     expect(bubble({ text: "a b", tone: "say", maxWidth: 9 + 5 })).not.toBe(bubble({ text: "a b", tone: "say" }));
+  });
+
+  it("makes a count plate with the digits on it", () => {
+    const plate = tag("159");
+    expect(plate.height).toBe(12);
+    expect(plate.width).toBe(2 + 4 + textWidth("159"));
+    expect(plate.anchor).toEqual({ x: Math.floor(plate.width / 2), y: 12 });
+    expect(opaque(plate).every(Boolean)).toBe(true);
+    expect(plate.pixels).not.toEqual(tag("158").pixels);
+    expect(tag("159")).toBe(plate);
   });
 
   it("keeps a bounded number of drawings", () => {

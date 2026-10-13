@@ -4,7 +4,7 @@ import type { CharacterLook, Slot } from "./palette";
 import { CHAIR_ROWS, PROP_LEGEND } from "./props";
 
 /**
- * People, 16 x 24, feet on the bottom row. A character is composed from layers (cape or tail,
+ * People, 16 x 24, feet on the bottom row (lying down, 24 x 16). A character is composed from layers (cape or tail,
  * body, chair back, head, headgear), so every role shares one body and every pose shares one head.
  *
  * Legend: o outline, s/S skin, h/H hair, t/T shirt, p pants, b shoes,
@@ -13,12 +13,36 @@ import { CHAIR_ROWS, PROP_LEGEND } from "./props";
 
 export type CharacterRole = "overseer" | "nexus" | "meow" | "agent";
 /** `sit` facing up is the back view at a desk, and its two frames are typing. */
-export type CharacterPose = "idle" | "walk" | "sit" | "sleep";
+export type CharacterPose =
+  | "idle"
+  | "walk"
+  | "sit"
+  | "sleep"
+  /** Standing with a cup; frame 1 lifts it to the mouth. */
+  | "drink"
+  /** Standing; frame 1 opens the mouth and moves a hand. */
+  | "talk"
+  /** Standing; frame 1 has both arms up. */
+  | "stretch"
+  /** Seated facing the viewer with eyes shut, head nodding. */
+  | "doze"
+  /** Lying asleep, drawn sideways: this pose alone is 24 x 16. */
+  | "lie";
 export type Facing = "down" | "up" | "left" | "right";
 
 export const CHARACTER_WIDTH = 16;
 export const CHARACTER_HEIGHT = 24;
-export const CHARACTER_FRAMES: Readonly<Record<CharacterPose, number>> = { idle: 2, walk: 4, sit: 2, sleep: 2 };
+export const CHARACTER_FRAMES: Readonly<Record<CharacterPose, number>> = {
+  idle: 2,
+  walk: 4,
+  sit: 2,
+  sleep: 2,
+  drink: 2,
+  talk: 2,
+  stretch: 2,
+  doze: 2,
+  lie: 2,
+};
 
 export interface CharacterSpec {
   readonly role: CharacterRole;
@@ -26,7 +50,7 @@ export interface CharacterSpec {
   readonly pose?: CharacterPose;
   readonly facing?: Facing;
   /** Something in the hand. Shown from the front and the sides, not from behind. */
-  readonly carry?: "cup" | null;
+  readonly carry?: "cup" | "book" | null;
   /** Any integer; wraps at the pose's frame count. Frame 0 is the still to show under reduced motion. */
   readonly frame?: number;
 }
@@ -162,6 +186,48 @@ const LEGS_SEATED = ["...oppppppppo...", "...opppoopppo...", "...obbboobbbo...",
 
 const CUP = ["oooo", "occo", "owwo", "oooo"];
 const CUP_LEFT = 11;
+const BOOK = ["ooooooo", "owwowwo", "owwowwo", "ooooooo"];
+const BOOK_LEFT = 5;
+// Drinking: the right arm leaves the side and comes up beside the face, cup at the mouth.
+const TORSO_DRINK = [
+  "...otttttttto...",
+  "..otTttttttTo...",
+  "..otTttttttTo...",
+  "..osTttttttTo...",
+  "..ootttttttto...",
+];
+const ARM_RAISED = ["oo", "to", "to", "to"];
+const TORSO_ARMLESS = [
+  "...otttttttto...",
+  "...oTttttttTo...",
+  "...oTttttttTo...",
+  "...oTttttttTo...",
+  "...otttttttto...",
+];
+// Rows 5 to 13: both arms straight up past the head.
+const ARMS_UP = [
+  ".oo..........oo.",
+  "oso..........oso",
+  "oto..........oto",
+  "oto..........oto",
+  "oto..........oto",
+  "oto..........oto",
+  "oto..........oto",
+  ".oto........oto.",
+  "..oto......oto..",
+];
+const ARMS_UP_TOP = 5;
+const EYES_SHUT: readonly Patch[] = [
+  [6, 8, "s"],
+  [9, 8, "s"],
+  [5, 9, "o"],
+  [10, 9, "o"],
+];
+const EYES_SHUT_SIDE: readonly Patch[] = [
+  [8, 8, "s"],
+  [11, 8, "s"],
+  [7, 9, "o"],
+];
 
 const TORSO_TOP = 13;
 const SEATED_DROP = 2;
@@ -197,9 +263,9 @@ const HAT = [
   "..oooooooooooo..",
 ];
 const HEADSET_FRONT = [
-  "..........oAo...",
-  "..........oAo...",
-  "...........o....",
+  ".........oAAo...",
+  ".........oAAo...",
+  "..........oo....",
   "....oooooooo....",
   "...oaaaaaaaao...",
   "................",
@@ -256,11 +322,13 @@ function headCanvas(
   look: CharacterLook,
   role: CharacterRole,
   legend: Legend,
+  eyesShut: boolean,
 ): Canvas {
   const view = facing === "up" || facing === "down" ? facing : "side";
   const base = view === "up" ? HEAD_UP : view === "down" ? HEAD_DOWN : HEAD_RIGHT;
   const hair = HAIR_STYLES[look.hairStyle % HAIR_STYLES.length]![view];
-  const head = paint(patched(base, hair), legend);
+  const eyes = !eyesShut ? [] : view === "down" ? EYES_SHUT : view === "side" ? EYES_SHUT_SIDE : [];
+  const head = paint(patched(base, [...hair, ...eyes]), legend);
   const gear =
     role === "overseer"
       ? HAT
@@ -274,18 +342,25 @@ function headCanvas(
             : EARS
           : null;
   if (gear) blit(head, paint(gear, legend));
-  return facing === "left" ? mirror(head) : head;
+  return head;
 }
 
-function compose(spec: Required<CharacterSpec>): Canvas {
-  const { role, look } = spec;
-  const seated = spec.pose === "sit" || spec.pose === "sleep";
-  // Seated characters face the desk or the viewer; asleep is always slumped toward the desk.
-  const facing: Facing = spec.pose === "sleep" ? "up" : seated && spec.facing !== "up" ? "down" : spec.facing;
+/** Draws one frame facing down, up or right. Left is the mirror of right, done by the caller. */
+function compose(spec: Required<CharacterSpec>, eyesShut = false): Canvas {
+  const { role, look, pose, frame } = spec;
+  const seated = pose === "sit" || pose === "sleep" || pose === "doze";
+  // Seated characters face the desk or the viewer; asleep at a desk is always slumped toward it.
+  const facing: Facing =
+    pose === "sleep"
+      ? "up"
+      : pose === "doze" || (seated && spec.facing !== "up") || (pose === "stretch" && spec.facing !== "up")
+        ? "down"
+        : spec.facing;
   const back = facing === "up";
   const legend = legendFor(look, role);
   const out = canvas(CHARACTER_WIDTH, CHARACTER_HEIGHT);
   const drop = seated ? SEATED_DROP : 0;
+  const acting = frame === 1 && !back;
 
   const backItem = role === "overseer" ? CAPE : role === "meow" ? TAIL : null;
   const drawBackItem = () => {
@@ -296,8 +371,8 @@ function compose(spec: Required<CharacterSpec>): Canvas {
   let legs = seated ? LEGS_SEATED : LEGS_IDLE;
   let flip = false;
   let headDrop = drop;
-  if (spec.pose === "walk") {
-    const step = spec.frame % 4;
+  if (pose === "walk") {
+    const step = frame % 4;
     if (step === 0 || step === 2) {
       torso = TORSO_WALK;
       legs = LEGS_STEP;
@@ -305,12 +380,21 @@ function compose(spec: Required<CharacterSpec>): Canvas {
     } else {
       headDrop += 1;
     }
-  } else if (spec.pose === "sit" && back) {
-    torso = spec.frame === 0 ? TORSO_TYPE_OUT : TORSO_TYPE_IN;
-  } else if (spec.pose === "sleep") {
-    headDrop += 3 + spec.frame;
+  } else if (pose === "sit" && back) {
+    torso = frame === 0 ? TORSO_TYPE_OUT : TORSO_TYPE_IN;
+  } else if (pose === "sleep") {
+    headDrop += 3 + frame;
+  } else if (pose === "doze") {
+    headDrop += 1 + frame;
+  } else if (pose === "drink") {
+    if (acting) torso = TORSO_DRINK;
+  } else if (pose === "talk") {
+    if (acting) torso = TORSO_WALK;
+    else headDrop += back ? frame : 0;
+  } else if (pose === "stretch") {
+    if (frame === 1) torso = TORSO_ARMLESS;
   } else {
-    headDrop += spec.frame;
+    headDrop += frame;
   }
 
   if (!back) drawBackItem();
@@ -319,10 +403,40 @@ function compose(spec: Required<CharacterSpec>): Canvas {
   blit(body, paint(torso, legend), 0, TORSO_TOP + drop);
   blit(out, flip ? mirror(body) : body);
   if (back) drawBackItem();
-  if (spec.carry === "cup" && !back) blit(out, paint(CUP, PROP_LEGEND), CUP_LEFT, TORSO_TOP + 1 + drop);
+  const cup = spec.carry === "cup" || pose === "drink";
+  const sipping = pose === "drink" && acting;
+  if (cup && !back && !sipping) blit(out, paint(CUP, PROP_LEGEND), CUP_LEFT, TORSO_TOP + 1 + drop);
+  if (spec.carry === "book" && !back && pose !== "drink") {
+    blit(out, paint(BOOK, PROP_LEGEND), BOOK_LEFT, TORSO_TOP + 1 + drop);
+  }
   if (seated && back) blit(out, paint(CHAIR_ROWS, PROP_LEGEND), 0, CHARACTER_HEIGHT - CHAIR_ROWS.length);
-  blit(out, headCanvas(facing, look, role, legend), 0, headDrop);
+  blit(out, headCanvas(facing, look, role, legend, eyesShut || pose === "doze"), 0, headDrop);
+  if (sipping) {
+    blit(out, paint(ARM_RAISED, legend), 12, 10);
+    blit(out, paint(CUP, PROP_LEGEND), 8, 9);
+  }
+  if (pose === "talk" && acting) blit(out, paint(["oo"], legend), facing === "down" ? 7 : 9, 10 + headDrop);
+  if (pose === "stretch" && frame === 1) blit(out, paint(ARMS_UP, legend), 0, ARMS_UP_TOP);
   return out;
+}
+
+export const LYING_WIDTH = CHARACTER_HEIGHT;
+export const LYING_HEIGHT = CHARACTER_WIDTH;
+
+/** Turns a standing figure a quarter turn, head to the left. */
+function laidDown(standing: Canvas): Canvas {
+  const out = canvas(LYING_WIDTH, LYING_HEIGHT);
+  for (let y = 0; y < standing.height; y++) {
+    for (let x = 0; x < standing.width; x++) {
+      out.pixels[(standing.width - 1 - x) * LYING_WIDTH + y] = standing.pixels[y * standing.width + x]!;
+    }
+  }
+  return out;
+}
+
+function draw(spec: Required<CharacterSpec>): Canvas {
+  if (spec.pose === "lie") return laidDown(compose({ ...spec, pose: "idle", facing: "down", carry: null }, true));
+  return spec.facing === "left" ? mirror(compose({ ...spec, facing: "right" })) : compose(spec);
 }
 
 /** Looks times roles times frames runs to hundreds of thousands of drawings; keep the recent ones. */
@@ -340,8 +454,8 @@ export function character(spec: CharacterSpec): Bitmap {
   const key = `c:${full.role}:${pose}:${full.facing}:${frame}:${skin}.${hair}.${hairStyle}.${shirt}.${pants}:${carry ?? ""}`;
   let bitmap = cache.get(key);
   if (!bitmap) {
-    const drawn = compose(full);
-    bitmap = { key, ...drawn, anchor: { x: CHARACTER_WIDTH / 2, y: CHARACTER_HEIGHT } };
+    const drawn = draw(full);
+    bitmap = { key, ...drawn, anchor: { x: drawn.width / 2, y: drawn.height } };
     cache.set(key, bitmap);
   }
   return bitmap;

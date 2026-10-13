@@ -1,12 +1,12 @@
 export { officePalette, lookFor, slotIndex, paletteColor, type Palette, type CharacterLook, type Slot } from "./palette";
-export { character, CHARACTER_FRAMES, CHARACTER_HEIGHT, CHARACTER_WIDTH } from "./characters";
+export { character, CHARACTER_FRAMES, CHARACTER_HEIGHT, CHARACTER_WIDTH, LYING_HEIGHT, LYING_WIDTH } from "./characters";
 export type { CharacterPose, CharacterRole, CharacterSpec, Facing } from "./characters";
-export { door, prop, tile, wallTop, wallTopAt, PROPS, PROP_USES, TILE } from "./props";
+export { archiveLevel, door, prop, tile, wallTop, wallTopAt, PROPS, PROP_USES, TILE } from "./props";
 export type { PropId, PropInfo, PropOptions, ScreenState, TileId, UsePoint, WallJoins } from "./props";
 export { emote, EMOTE_ANCHOR, EMOTE_FRAMES, EMOTE_SIZE, type EmoteId } from "./emotes";
 export { composite, type Bitmap, type Layer, type Point } from "./grid";
 export { Sprite, anchored, deviceBubbleScale, deviceCrispScale, devicePixelScale, deviceSnap, spriteUri, type SpriteProps } from "./sprite";
 export { crispScale, devicePixels, snap } from "./scale";
-export { bubble, bubbleScale, bubbleSize, bubbleWidth, BUBBLE_HEIGHT, BUBBLE_MAX_LINES, BUBBLE_MAX_WIDTH } from "./bubble";
+export { bubble, bubbleScale, bubbleSize, bubbleWidth, tag, BUBBLE_HEIGHT, BUBBLE_MAX_LINES, BUBBLE_MAX_WIDTH } from "./bubble";
 export type { BubbleSpec, BubbleStatus, BubbleTone } from "./bubble";
 export { fitText, foldText, textWidth, wrapText } from "./text";
