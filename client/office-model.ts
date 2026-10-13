@@ -100,6 +100,11 @@ export interface ZoneProp {
 
 /** Somewhere a character goes to be: in front of the coffee machine, on the sofa. One character each. */
 export interface UseSpot extends Point {
+  /**
+   * Which place this is, in the room's own terms: `sofa:1`, `table:0`,
+   * `walkway:4`. The same place keeps its id when the room is laid out afresh.
+   */
+  id: string;
   /** The clear row it is reached by. */
   aisleY: number;
   pose: "stand" | "sit";
@@ -174,6 +179,11 @@ export interface Office {
   roomOf: ReadonlyMap<string, string>;
   /** agentId → where it stands. Visitors never take a desk, so they move nobody. */
   visitors: ReadonlyMap<string, Visitor>;
+  /**
+   * The building: the rectangle around all the rooms. What is inside it and
+   * in no room is hallway, not a hole.
+   */
+  building: Rect | null;
   /**
    * The width the caller offered was narrower than `MIN_ROOM_WIDTH`; the office
    * is laid out at the minimum and a view has to scroll or scale.
@@ -394,16 +404,17 @@ function furnish(left: number, top: number, contentWidth: number): Zone[] {
   const spotsOf = (props: readonly ZoneProp[], zone: "pantry" | "lounge"): UseSpot[] => {
     const spots: UseSpot[] = [];
     for (const item of props) {
-      for (const use of PROP_USES[item.id]) {
+      PROP_USES[item.id].forEach((use, place) => {
         // Lying down takes a whole sofa; here a sofa seats two.
-        if (use.pose === "lie") continue;
+        if (use.pose === "lie") return;
         const spot = { x: item.x + use.dx, y: item.y + use.dy };
         const tile = `${spot.x},${spot.y}`;
         // One character to a tile, and nobody on the rug: whoever claimed it first has it.
-        if (taken.has(tile)) continue;
+        if (taken.has(tile)) return;
         taken.add(tile);
         spots.push({
           ...spot,
+          id: `${item.id}:${place}`,
           // Everything is reached from the walkway: a step up to the row in front, two to a seat.
           aisleY: walkY,
           pose: use.pose === "sit" ? "sit" : "stand",
@@ -412,7 +423,7 @@ function furnish(left: number, top: number, contentWidth: number): Zone[] {
           prop: item.id,
           zone,
         });
-      }
+      });
     }
     return spots;
   };
@@ -651,9 +662,12 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
   const width = Math.max(MIN_ROOM_WIDTH, Math.floor(options.width));
   const holding = options.holding ?? new Set<string>();
 
+  const leaving = (node: CrewNode): boolean => holding.has(node.agent.id) || node.children.some(leaving);
+  // A room whose last agent is still walking out is not empty yet.
+  const empty = (group: CrewGroup) => isDormant(group) && !group.roots.some(leaving);
   const ordered = [...groups].sort((a, b) => {
     // Rooms nobody is in go last, so that the rooms in use keep their places among themselves.
-    const asleep = Number(isDormant(a)) - Number(isDormant(b));
+    const asleep = Number(empty(a)) - Number(empty(b));
     if (asleep !== 0) return asleep;
     const left = oldestRoot(a);
     const right = oldestRoot(b);
@@ -725,7 +739,9 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
     });
   });
   const height = rooms.reduce((bottom, room) => Math.max(bottom, room.y + room.height), 0);
-  return { width, height, rooms, desks, roomOf, visitors, cramped };
+  const right = rooms.reduce((edge, room) => Math.max(edge, room.x + room.width), 0);
+  const building = rooms.length > 0 ? { x: 0, y: 0, width: right, height } : null;
+  return { width, height, rooms, desks, roomOf, visitors, building, cramped };
 }
 
 export type Activity =
@@ -770,6 +786,8 @@ export interface Presence {
   lounging: boolean;
   /** What it is doing where it is, when that is more than standing or sitting. */
   act: Act | null;
+  /** Which break place it is at, by `UseSpot.id`; null at its desk. */
+  placeId: string | null;
   /** Art pixels to raise the sprite so a sitter rests on the seat. */
   lift: number;
   carry: "cup" | "book" | null;
@@ -839,7 +857,17 @@ export function assignBreaks(room: Room, idlers: readonly Idler[], reserved: rea
   const walkway: UseSpot[] = [];
   // The corridor's foot is kept clear: everybody comes in through it.
   for (let x = room.lounge.walkway.x + 1; x < room.lounge.walkway.x + room.lounge.walkway.width; x += 1) {
-    walkway.push({ x, y: room.lounge.walkway.y, aisleY: room.lounge.walkway.y, pose: "stand", facing: "down", lift: 0, prop: null, zone: "walkway" });
+    walkway.push({
+      id: `walkway:${x - room.lounge.walkway.x}`,
+      x,
+      y: room.lounge.walkway.y,
+      aisleY: room.lounge.walkway.y,
+      pose: "stand",
+      facing: "down",
+      lift: 0,
+      prop: null,
+      zone: "walkway",
+    });
   }
   const key = (spot: Point) => `${spot.x},${spot.y}`;
   // The table stands between the two zones; both its places belong with the pantry.
@@ -922,6 +950,7 @@ export function presenceOf(
     lift: 0,
     carry: null,
     act: null,
+    placeId: null,
   };
   const away = breakSpot && onBreak(agent, now) ? breakSpot : null;
   switch (state) {
@@ -941,6 +970,7 @@ export function presenceOf(
       return {
         ...base,
         activity: "gathering",
+        placeId: away.id,
         at: { x: away.x, y: away.y },
         aisleY: away.aisleY,
         // At the table it faces whoever is opposite; anywhere else it turns to the room, cup in hand.
@@ -977,6 +1007,7 @@ export function presenceOf(
       return {
         ...base,
         activity: "wandering",
+        placeId: away.id,
         at: { x: away.x, y: away.y },
         aisleY: away.aisleY,
         facing: away.facing,
@@ -1053,6 +1084,7 @@ export function presences(
       lift: 0,
       carry: null,
       act: null,
+      placeId: "visitor",
       screenOn: false,
       emote: state === "needs-input" ? "question" : state === "failed" ? "alert" : state === "ready" ? "check" : null,
       range: null,

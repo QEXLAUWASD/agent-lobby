@@ -40,6 +40,7 @@ import {
 import {
   ArchiveSprite,
   BubbleSprite,
+  BuildingBackdrop,
   ChairSprite,
   CharacterSprite,
   DeskSprite,
@@ -734,20 +735,22 @@ const ClosedFixture = memo(function ClosedFixture({
   if (!closed) return null;
   const count = closed.ids.length;
   const found = matching !== null && matching > 0;
-  // The cabinet rises a tile above its own; the target covers both, and is padded out to 44 px.
-  const slop = touchSlop(tile);
+  // The cabinet rises a tile above its own. The pressable covers both and is padded out to 44 px each
+  // way by layout, not by hitSlop, which the web does not promise to honour.
+  const padX = touchSlop(tile);
+  const padTop = Math.max(0, MIN_TOUCH - 2 * tile);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${count} closed ${count === 1 ? "agent" : "agents"} in ${room.name}${found ? `, ${matching} matching` : ""}. Opens the list.`}
-      hitSlop={{ top: slop, bottom: slop, left: slop, right: slop }}
       onPress={() => onPress(room.workspaceId)}
       style={{
         position: "absolute",
-        left: closed.at.x * tile,
-        top: (closed.at.y - 1) * tile,
-        width: tile,
-        height: 2 * tile,
+        left: closed.at.x * tile - padX,
+        top: (closed.at.y - 1) * tile - padTop,
+        width: tile + 2 * padX,
+        height: 2 * tile + padTop,
+        paddingHorizontal: padX,
         justifyContent: "flex-end",
         borderRadius: 3,
         borderWidth: found ? 1 : 0,
@@ -881,7 +884,8 @@ export function OfficeScene({
       const placesKey = (["seat", "stand", "lounge", "out"] as const)
         .map((name) => `${places[name].at.x},${places[name].at.y},${places[name].aisleY}`)
         .join("|");
-      const breakKey = `${home.x - room.x},${home.y - room.lounge.y}`;
+      // The place's own name, which a reshape of the room does not change: only the agent moving on does.
+      const breakKey = presence.placeId ?? "desk";
       out.set(agentId, { agentId, agent, presence, places, placesKey, breakKey, seatKey: desk?.seatKey ?? "visitor", corridorX: room.corridorX, roomId: room.workspaceId, visiting: desk === null });
     };
     for (const desk of seated) {
@@ -945,6 +949,9 @@ export function OfficeScene({
         {/* A pane is rarely a whole number of tiles wide: the office sits in the middle of what is left
             over, on a device pixel so that nothing in it softens. */}
         <View style={{ width, height, marginLeft: snapToDevice(Math.max(0, (available - width) / 2)) }}>
+          {office.building && office.rooms.length > 1 ? (
+            <BuildingBackdrop theme={theme} tile={tile} width={office.building.width} height={office.building.height} />
+          ) : null}
           {office.rooms.map((room) => (
             <RoomBackdrop key={room.workspaceId} theme={theme} tile={tile} room={room} />
           ))}

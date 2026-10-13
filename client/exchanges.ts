@@ -51,14 +51,27 @@ export const LABEL_MAX_CHARS = 200;
 const SAY_BUFFER_CHARS = 400;
 const AGENT_MESSAGE_CALL_PREFIX = "paseo-agent-message:";
 
-/** First non-empty line, without leading markdown markers, cut to `max` characters. */
+/**
+ * The first line that says something, as plain words, cut to `max` characters.
+ * What is markup and not speech is dropped before the cut: code fences and the
+ * code inside them, images, file URLs, heading, quote and list marks, emphasis
+ * and backticks. A link keeps its words.
+ */
 export function firstLine(text: string, max = BUBBLE_MAX_CHARS): string {
   let line = "";
+  let fenced = false;
   for (const candidate of text.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(candidate)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
     const cleaned = candidate
-      // An image says nothing in a bubble; a link says its words.
       .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
       .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/<file:\/\/[^>]*>|file:\/\/[^\s)]*/g, " ")
+      .replace(/^\s*(?:#{1,6}\s+|>+\s*|[-*+]\s+|\d+[.)]\s+)+/, "")
+      .replace(/(\*\*|__|`+)/g, "")
       .replace(/^[\s#>*\-`]+/, "")
       .replace(/\s+/g, " ")
       .trim();

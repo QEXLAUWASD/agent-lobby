@@ -54,27 +54,30 @@ const officeOf = (agents: PaseoAgent[], width = 12) =>
   layoutOffice(groupByWorkspace(buildForest(agents, null), new Map()), { width });
 
 describe("sceneScale", () => {
-  it("draws small: one and a half to one in a side pane, one to one in a pane too narrow for a room", () => {
-    expect(sceneScale(320)).toEqual({ scale: 1.5, tile: 24, widthTiles: 13 });
-    expect(sceneScale(390)).toEqual({ scale: 1.5, tile: 24, widthTiles: 16 });
-    expect(sceneScale(1400)).toEqual({ scale: 1.5, tile: 24, widthTiles: 58 });
-    expect(sceneScale(216)).toEqual({ scale: 1.5, tile: 24, widthTiles: 9 });
-    expect(sceneScale(215)).toEqual({ scale: 1, tile: 16, widthTiles: 13 });
-    expect(sceneScale(0)).toEqual({ scale: 1, tile: 16, widthTiles: 0 });
+  it("draws small, and about the same size on every screen", () => {
+    // A 2× screen: one to one, a character 16 by 24, a 320 px pane twenty tiles across.
+    expect(sceneScale(320, 2)).toEqual({ scale: 1, tile: 16, widthTiles: 20 });
+    expect(sceneScale(1400, 2)).toEqual({ scale: 1, tile: 16, widthTiles: 87 });
+    expect(sceneScale(320, 1)).toEqual({ scale: 1, tile: 16, widthTiles: 20 });
+    expect(sceneScale(0, 2)).toEqual({ scale: 1, tile: 16, widthTiles: 0 });
+    // A 1.67× screen: 1.2.
+    expect(sceneScale(313, 5 / 3).scale).toBeCloseTo(1.2);
+    expect(sceneScale(313, 5 / 3).widthTiles).toBe(16);
+    expect(sceneScale(320, 3).scale).toBeCloseTo(4 / 3);
+    expect(sceneScale(320, 1.5).scale).toBeCloseTo(4 / 3);
   });
 
-  it("keeps one art pixel a whole number of device pixels", () => {
-    for (const ratio of [1, 1.25, 1.5, 1.67, 2, 2.625, 3]) {
-      for (const width of [200, 320, 900]) {
+  it("keeps one art pixel a whole number of device pixels, never under one to one", () => {
+    for (const ratio of [1, 1.25, 1.5, 5 / 3, 2, 2.625, 3]) {
+      for (const width of [100, 320, 900]) {
         const { scale } = sceneScale(width, ratio);
         expect(Math.abs(scale * ratio - Math.round(scale * ratio))).toBeLessThan(1e-9);
         expect(scale).toBeGreaterThanOrEqual(1);
         expect(scale).toBeLessThanOrEqual(1.6 + 1e-9);
       }
     }
-    expect(sceneScale(320, 1).scale).toBe(1);
-    expect(sceneScale(320, 1.67).scale).toBeCloseTo(2 / 1.67);
-    expect(sceneScale(320, 3).scale).toBeCloseTo(4 / 3);
+    // A pane too narrow for a room at the usual size takes the smallest there is.
+    expect(sceneScale(150, 3).scale).toBeCloseTo(1);
   });
 });
 

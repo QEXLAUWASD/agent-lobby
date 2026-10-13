@@ -345,6 +345,32 @@ function roomBitmap(room: Room, key: string): Bitmap {
   return composite(key, room.width * ART_TILE, room.height * ART_TILE, layers);
 }
 
+/**
+ * The building the rooms stand in: an outer wall and hallway floor, as one
+ * image, drawn under the rooms. Where no room is, there is hallway, not a hole.
+ */
+export const BuildingBackdrop = memo(function BuildingBackdrop({
+  theme,
+  tile,
+  width,
+  height,
+}: SpriteProps & { width: number; height: number }) {
+  const bitmap = useMemo(() => {
+    const isWall = (x: number, y: number) =>
+      x >= 0 && y >= 0 && x < width && y < height && (x === 0 || y === 0 || x === width - 1 || y === height - 1);
+    const layers: Layer[] = [];
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        layers.push({ bitmap: isWall(x, y) ? wallTopAt(isWall, x, y) : tileBitmap("floorAlt"), x: x * ART_TILE, y: y * ART_TILE });
+      }
+    }
+    return composite(`building:${width}x${height}`, width * ART_TILE, height * ART_TILE, layers);
+  }, [width, height]);
+  return (
+    <Sprite sprite={bitmap} palette={officePalette(theme)} scale={artScale(tile)} style={{ position: "absolute", left: 0, top: 0 }} />
+  );
+});
+
 export const RoomBackdrop = memo(function RoomBackdrop({ theme, tile, room }: SpriteProps & { room: Room }) {
   // The layout is rebuilt on every directory update; the layers only when the room changes shape.
   const key = roomKey(room);

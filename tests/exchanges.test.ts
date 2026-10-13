@@ -51,6 +51,14 @@ describe("firstLine", () => {
     // An image line says nothing; a link says its words.
     expect(firstLine("![Image](file:///var/folders/x/shot.png)\nThe panel renders.")).toBe("The panel renders.");
     expect(firstLine("See [the README](https://example.com/readme) first")).toBe("See the README first");
+    // Code is not speech: the fence and what is in it are skipped, and backticks dropped.
+    expect(firstLine("```ts\nconst x = 1;\n```\nIt compiles.")).toBe("It compiles.");
+    expect(firstLine("~~~\nlog\n~~~")).toBe("");
+    expect(firstLine("Run `npm run check` now")).toBe("Run npm run check now");
+    expect(firstLine("1. **First** thing")).toBe("First thing");
+    expect(firstLine("> - ## quoted")).toBe("quoted");
+    expect(firstLine("Saved to file:///Users/x/shot.png and <file:///tmp/a b> here")).toBe("Saved to and here");
+    expect(firstLine("file:///only/a/path.png\nDone")).toBe("Done");
   });
 
   it("truncates on code points, not in the middle of one", () => {

@@ -200,6 +200,30 @@ describe("layoutOffice", () => {
     expect(layout.desks.get("root")?.remote).toBe(false);
   });
 
+  it("never lets two rooms share more than a wall, whatever their sizes and the width", () => {
+    const sizes = [1, 9, 3, 14, 2, 6, 1, 11, 4, 1, 7];
+    const agents = sizes.flatMap((count, room) =>
+      Array.from({ length: count }, (_, seat) => agent({ id: `r${room}-${seat}`, workspaceId: `ws-${String(room).padStart(2, "0")}` })),
+    );
+    for (let width = 10; width <= 90; width += 7) {
+      const layout = office(agents, width);
+      expect(layout.rooms).toHaveLength(sizes.length);
+      for (const a of layout.rooms) {
+        expect(a.x + a.width).toBeLessThanOrEqual(layout.width);
+        for (const b of layout.rooms) {
+          if (a === b) continue;
+          const across = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+          const down = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+          // They overlap, if at all, by one tile in one direction: the wall between them.
+          expect(across <= 1 || down <= 1).toBe(true);
+        }
+      }
+      // The building is the box around them all.
+      expect(layout.building).toEqual({ x: 0, y: 0, width: Math.max(...layout.rooms.map((room) => room.x + room.width)), height: layout.height });
+    }
+    expect(layoutOffice([], { width: 40 }).building).toBeNull();
+  });
+
   it("makes a room as large as what it holds, never wider than it is offered", () => {
     const solo = office([agent({ id: "one" })], 40).rooms[0];
     const five = office(crew().slice(0, 5), 40).rooms[0];
@@ -375,6 +399,19 @@ describe("closed agents", () => {
     expect(layout.rooms[0]?.closed?.ids).toEqual(["nexus"]);
     // A closed root's parent does not come visiting for it, and a closed parent in the office is not a visitor.
     expect(layout.visitors.size).toBe(0);
+  });
+
+  it("keep their room in its place while the last of them is still walking out", () => {
+    const last = agent({ id: "last", workspaceId: "ws-first" });
+    const busy = agent({ id: "busy", workspaceId: "ws-second", status: "running" });
+    const before = office([last, busy], 30);
+    const shut = { ...last, status: "closed" } as PaseoAgent;
+    const groups = groupByWorkspace(buildForest([shut, busy], null), new Map());
+    const leaving = layoutOffice(groups, { width: 30, holding: new Set(["last"]) });
+    expect(leaving.rooms.map((room) => room.workspaceId)).toEqual(before.rooms.map((room) => room.workspaceId));
+    expect(cells(leaving)).toEqual(cells(before));
+    // Once it has left, the room is bare and goes to the end.
+    expect(layoutOffice(groups, { width: 30 }).rooms.map((room) => room.workspaceId)).toEqual(["ws-second", "ws-first"]);
   });
 
   it("make a room nobody is in: bare, last, with only the fixture", () => {
@@ -661,9 +698,13 @@ describe("presenceOf", () => {
       screenOn: false,
       carry: null,
     });
-    expect(at("idle", subject, table)).toMatchObject({ lounging: false, act: "drink", facing: table.facing, lift: 0 });
+    expect(at("idle", subject, table)).toMatchObject({ lounging: false, act: "drink", facing: table.facing, lift: 0, placeId: table.id });
+    // A place keeps its name when the room is laid out afresh, so the scene can tell a reshape from a move.
+    expect(table.id).toBe("table:0");
+    expect(sofa.id).toMatch(/^sofa:[01]$/);
+    expect(at("working").placeId).toBeNull();
     expect(presenceOf(subject, "idle", desk, table, now, true).act).toBe("talk");
-    const walkway = { x: room.lounge.walkway.x + 3, y: room.lounge.walkway.y, aisleY: room.lounge.walkway.y, pose: "stand" as const, facing: "down" as const, lift: 0, prop: null, zone: "walkway" as const };
+    const walkway = { id: "walkway:3", x: room.lounge.walkway.x + 3, y: room.lounge.walkway.y, aisleY: room.lounge.walkway.y, pose: "stand" as const, facing: "down" as const, lift: 0, prop: null, zone: "walkway" as const };
     expect(at("idle", subject, walkway).act).toBe("stretch");
     // What somebody does on the sofa is theirs for the stretch: sitting, dozing or reading a book.
     const onSofa = new Set(Array.from({ length: 40 }, (_, index) => at("idle", { ...subject, id: `sitter-${index}` } as PaseoAgent).act));

@@ -97,18 +97,6 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const office = mode === "office";
   // Small, and the same in a side pane as on the whole surface.
   const scale = useMemo(() => sceneScale(size.scene, PixelRatio.get()), [size.scene]);
-  const everyGroup = useMemo(() => groupByWorkspace(roots, directory.workspaces), [roots, directory.workspaces]);
-  // Across workspaces, a room nobody is in stays folded away until a search or
-  // the Closed filter singles out somebody in it.
-  const groups = useMemo(() => {
-    if (scope !== null) return everyGroup;
-    return everyGroup.filter(
-      (group) =>
-        !isDormant(group) ||
-        (highlighted !== null && candidatesOf(group.roots).some((candidate) => highlighted.has(candidate.id))),
-    );
-  }, [everyGroup, scope, highlighted]);
-  const folded = everyGroup.length - groups.length;
   const nodes = useMemo(() => indexNodes(roots), [roots]);
   // A closed agent has no desk, but it keeps the one it had until it has walked out of the door.
   const [left, setLeft] = useState<ReadonlySet<string>>(NOBODY);
@@ -121,6 +109,20 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     }
     return out.size > 0 ? out : NOBODY;
   }, [nodes, left, office, reducedMotion]);
+  const everyGroup = useMemo(() => groupByWorkspace(roots, directory.workspaces), [roots, directory.workspaces]);
+  // Across workspaces, a room nobody is in stays folded away until a search or
+  // the Closed filter singles out somebody in it.
+  const groups = useMemo(() => {
+    if (scope !== null) return everyGroup;
+    return everyGroup.filter(
+      (group) =>
+        !isDormant(group) ||
+        // Its last agent is still walking out.
+        candidatesOf(group.roots).some((candidate) => holding.has(candidate.id)) ||
+        (highlighted !== null && candidatesOf(group.roots).some((candidate) => highlighted.has(candidate.id))),
+    );
+  }, [everyGroup, scope, highlighted, holding]);
+  const folded = everyGroup.length - groups.length;
   const plan = useMemo(
     () => layoutOffice(groups, { width: scale.widthTiles, agents: directory.agents, holding }),
     [groups, scale.widthTiles, directory.agents, holding],

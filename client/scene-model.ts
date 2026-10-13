@@ -14,8 +14,8 @@ export const TILE = 16;
 /** A character is one tile wide and one and a half tall, standing on the bottom of its tile. */
 export const CHARACTER_HEIGHT = 1.5;
 export const MIN_TOUCH = 44;
-/** Layout pixels per art pixel the office is drawn at, where the pane allows. */
-export const SCENE_SCALE = 1.5;
+/** Layout pixels per art pixel the office aims for: a character about 19 by 29. */
+export const SCENE_SCALE = 1.2;
 /** A room of two desks across with its pantry and lounge under them is this many tiles wide. */
 export const SCENE_MIN_TILES = 9;
 
@@ -29,20 +29,22 @@ export interface SceneScale {
 
 /**
  * How big the office is drawn. It lives in a side pane and is meant to be
- * glanced at, so it is small: one and a half screen pixels to the art pixel,
- * a character 24 by 36. A pane too narrow for a room of desks and a pantry at
- * that size gets one to one. Either is moved to the nearest size the screen
- * can draw without blur, where one art pixel is a whole number of device
- * pixels: on a 1.67× screen that is 1.2, on a 1× screen 1.
+ * glanced at, so it is small, and the same size on every screen: the size the
+ * screen can draw without blur (one art pixel a whole number of device pixels)
+ * that is nearest to `SCENE_SCALE`, and never under one to one. That is 1.2 on
+ * a 1.67× screen, 1 on a 2× or a 1× screen, 1.33 on a 3× one. Words do not
+ * shrink with it: bubbles have a scale of their own.
  */
 export function sceneScale(widthPx: number, pixelRatio = 2): SceneScale {
   const width = Math.max(0, Math.floor(widthPx));
-  // The largest crisp size not above the target: smaller is the point.
-  // Never under one to one: there the smallest crisp size at or above it.
   const least = Math.ceil(pixelRatio - 1e-6) / pixelRatio;
-  const normal = Math.max(least, Math.floor(SCENE_SCALE * pixelRatio + 1e-6) / pixelRatio);
-  const small = least;
-  const scale = Math.floor(width / (TILE * normal)) >= SCENE_MIN_TILES ? normal : small;
+  const below = Math.floor(SCENE_SCALE * pixelRatio + 1e-6) / pixelRatio;
+  const above = Math.ceil(SCENE_SCALE * pixelRatio - 1e-6) / pixelRatio;
+  // The nearer of the two crisp sizes either side of the aim; the smaller on a tie.
+  const nearest = SCENE_SCALE - below <= above - SCENE_SCALE ? below : above;
+  const normal = Math.max(least, nearest);
+  // A pane too narrow for a room at that size gets the smallest size there is.
+  const scale = Math.floor(width / (TILE * normal)) >= SCENE_MIN_TILES ? normal : least;
   const tile = TILE * scale;
   return { scale, tile, widthTiles: Math.floor(width / tile) };
 }
