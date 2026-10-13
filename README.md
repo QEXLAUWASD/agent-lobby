@@ -20,7 +20,7 @@ Two surfaces share one component:
 | Needs you | standing by the desk with a `?` |
 | Failed | at the desk, error screen, a cross |
 | Ready | standing by the desk with a check |
-| Idle | walking the lounge for 15 minutes, then asleep at the desk |
+| Idle | on a break for 15 minutes (at the pantry, the shelves or the sofa, moving on every few minutes), then asleep at the desk |
 | Closed | an empty desk, labelled |
 
 The `ghostline/role` label picks the outline: a hat and cape for an Overseer, a headset for a Nexus,
@@ -30,10 +30,16 @@ A seat never depends on state. It comes from who an agent's parent is and when i
 nobody moves when somebody else changes state or arrives. Search and the state chips dim everyone
 who does not match, in place.
 
-A message from one agent to another shows as a bubble over the sender and an envelope that travels
-to the recipient's desk. Working agents also show what they are saying and which tool they are
-running. Under reduced motion nothing walks or travels: characters stand where they belong and a
-line joins sender and recipient.
+Characters walk. When an agent starts work, finishes, goes on a break or closes, its character
+walks there at one pace along the aisle and the room's corridor; a new agent walks in from the door
+and a closed one walks out. When the room itself changes (a resize, a new desk row) characters are
+simply placed.
+
+A message from one agent to another shows as a pixel bubble over the sender and an envelope that
+travels to the recipient's desk. A working agent's bubble says what its tool does in a word (`Bash`,
+`Read`, `Edit`, `Find`, `Web`, `Msg`, `Agent`, `Plan`), or the start of what it is saying; a screen
+reader gets the full line. Under reduced motion nothing walks or travels: characters stand where
+they belong and a line joins sender and recipient.
 
 Selecting a character, or an empty desk, shows the workspace, directory, last error and pending
 permissions with Allow, Deny and Review, plus Open, Message and Archive. Archive confirms first.
@@ -77,7 +83,7 @@ paseo plugin reload crew
 ```
 
 The pure, tested modules: `client/model.ts` (state, the crew forest, filters), `client/office-model.ts`
-(rooms, desks, seats, presence), `client/exchanges.ts` (messages and bubbles), `client/feed-plan.ts`
+(rooms, desks, seats, zones, breaks, presence), `client/exchanges.ts` (messages and bubbles), `client/feed-plan.ts`
 and `client/feed-hub.ts` (which timelines to subscribe to, and the shared budget), `client/scene-model.ts` (scale, walks, marker paths) and
 `client/pixel/` (the art). `client/office.tsx` is the scene and draws only through
 `client/sprites.tsx`; `client/crew-view.tsx` hosts the office, the list, the detail and the dialogs.
