@@ -166,6 +166,9 @@ paseo plugin reload lobby    # recompile and reload in the running app
   pixel office, with seats, wandering and speech bubbles as the language of state. None of its
   code, art, tiles or map is used here.
 - [Gather](https://www.gather.town) for the picture of a shared office seen from above.
+- [Bàn về multi-agent orchestration và mô hình SLP](https://vhlam.com/article/agent-orchestration-multi-agent-slp),
+  the article that inspired this project: it is what made orchestrating agents a daily practice,
+  and it opened up what working with agents can be. With gratitude to its author.
 - [Paseo](https://paseo.sh) ([source](https://github.com/getpaseo/paseo)) and its plugin SDK, which
   this runs on and whose plugin documentation it follows.
 - [React Native](https://reactnative.dev) and
