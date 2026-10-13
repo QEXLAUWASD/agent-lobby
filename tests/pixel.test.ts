@@ -9,13 +9,16 @@ import {
   character,
 } from "../client/pixel/characters";
 import type { CharacterPose, CharacterRole, Facing } from "../client/pixel/characters";
+import { BUBBLE_HEIGHT, BUBBLE_MAX_CACHED, bubble, bubbleWidth, type BubbleTone } from "../client/pixel/bubble";
 import { contrast, luminance, mix, parseColor } from "../client/pixel/color";
 import { EMOTE_FRAMES, EMOTE_SIZE, emote, type EmoteId } from "../client/pixel/emotes";
+import { ELLIPSIS, FALLBACK, FONT_HEIGHT, GLYPH_CHARS, ICON, glyph } from "../client/pixel/font";
 import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "../client/pixel/grid";
 import { Lru } from "../client/pixel/lru";
 import { SLOTS, lookFor, officePalette, paletteColor, slotIndex } from "../client/pixel/palette";
 import { adler32, crc32, deflate, encodeIndexedPng, pngDataUri, toBase64, upscale, type Rgba } from "../client/pixel/png";
 import { PROPS, TILE, prop, tile, type PropId, type ScreenState } from "../client/pixel/props";
+import { fitText, foldText, textWidth } from "../client/pixel/text";
 
 const LIGHT: PluginTheme = {
   colors: {
@@ -394,6 +397,126 @@ describe("cache bounds", () => {
       });
     }
     const again = character({ role: "agent", look });
+    expect(again).not.toBe(first);
+    expect(again.pixels).toEqual(first.pixels);
+  });
+});
+
+describe("font and text", () => {
+  it("draws every glyph as a clean grid inside the line", () => {
+    const shapes = new Map<string, string>();
+    for (const char of GLYPH_CHARS) {
+      const { width, rows } = glyph(char);
+      expect(width, char).toBeGreaterThan(0);
+      expect(rows.length, char).toBeGreaterThanOrEqual(7);
+      expect(rows.length, char).toBeLessThanOrEqual(FONT_HEIGHT);
+      for (const line of rows) expect(line, char).toMatch(new RegExp(`^[#.]{${width}}$`));
+      if (char !== " ") expect(rows.join("").includes("#"), char).toBe(true);
+      const shape = rows.join("/").replace(/(\/\.+)+$/, "");
+      expect(shapes.get(shape), `${char} looks like ${shapes.get(shape)}`).toBeUndefined();
+      shapes.set(shape, char);
+    }
+    for (const char of "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:;!?-_+=/()[]<>'\"#@&%*") {
+      expect(GLYPH_CHARS, char).toContain(char);
+    }
+  });
+
+  it("folds Vietnamese and other accents to base letters", () => {
+    expect(foldText("Đang kiểm tra hiện trạng")).toBe("Dang kiem tra hien trang");
+    expect(foldText("ƯỚC ĐƯỜNG người Ừ")).toBe("UOC DUONG nguoi U");
+    expect(foldText("café naïve Ångström")).toBe("cafe naive Angstrom");
+    // Decomposed input: letters followed by combining marks.
+    expect(foldText("tie\u0302\u0301ng Vie\u0323\u0302t")).toBe("tieng Viet");
+  });
+
+  it("collapses whitespace and unknown runs, and maps typographic punctuation", () => {
+    expect(foldText("  a \n\t b  ")).toBe("a b");
+    expect(foldText("已完成 🎉🎉 done")).toBe(`${FALLBACK} ${FALLBACK} done`);
+    expect(foldText("\u201cok\u201d \u2014 a\u2192b")).toBe('"ok" - a->b');
+    expect(foldText(`${ICON.prompt}x`)).toBe(`${ICON.prompt}x`);
+    expect(foldText("")).toBe("");
+  });
+
+  it("measures text in art pixels", () => {
+    expect(textWidth("")).toBe(0);
+    expect(textWidth("i")).toBe(1);
+    expect(textWidth("ii")).toBe(3);
+    expect(textWidth("A")).toBe(5);
+    expect(textWidth("Ấ b")).toBe(5 + 1 + 3 + 1 + 5);
+  });
+
+  it("cuts to a width with an ellipsis and never overshoots", () => {
+    const text = "Xong rồi, đã sửa lỗi ở cổng thanh toán";
+    expect(fitText("Bash", 100)).toBe("Bash");
+    for (const max of [0, 3, 5, 12, 40, 80, 119, 500]) {
+      const cut = fitText(text, max);
+      expect(textWidth(cut), `max ${max}`).toBeLessThanOrEqual(max);
+      if (textWidth(text) > max && cut !== "") expect(cut.endsWith(ELLIPSIS)).toBe(true);
+    }
+    expect(fitText(text, 500)).toBe(foldText(text));
+    expect(fitText("ab cd", textWidth("ab c") + 2)).toBe(`ab${ELLIPSIS}`);
+    expect(fitText(text, 0)).toBe("");
+  });
+});
+
+describe("bubbles", () => {
+  const TONES: BubbleTone[] = ["say", "tool", "tell", "ask", "alert"];
+  const row = (bitmap: Bitmap, y: number) => [...bitmap.pixels.slice(y * bitmap.width, (y + 1) * bitmap.width)];
+
+  it("is as wide as bubbleWidth says, one height, anchored at the tail", () => {
+    for (const tone of TONES) {
+      for (const text of ["", "ok", "Bash", "Đang kiểm tra hiện trạng của toàn bộ hệ thống thanh toán"]) {
+        for (const maxWidth of [undefined, 30, 60, 146]) {
+          const spec = { text, tone, maxWidth };
+          const drawn = bubble(spec);
+          expect(drawn.width).toBe(bubbleWidth(spec));
+          expect(drawn.width).toBeLessThanOrEqual(maxWidth ?? 120);
+          expect(drawn.height).toBe(BUBBLE_HEIGHT);
+          expect(drawn.anchor).toEqual({ x: Math.floor(drawn.width / 2), y: BUBBLE_HEIGHT });
+          // The tip of the tail is the only pixel on the last row.
+          expect(row(drawn, BUBBLE_HEIGHT - 1).filter(Boolean)).toHaveLength(1);
+          expect(row(drawn, BUBBLE_HEIGHT - 1)[drawn.anchor.x]).toBe(slotIndex("outline"));
+        }
+      }
+    }
+  });
+
+  it("moves the tail where asked and keeps it off the corners", () => {
+    const spec = { text: "hello there", tone: "say" } as const;
+    const width = bubbleWidth(spec);
+    expect(bubble({ ...spec, tailX: 10 }).anchor.x).toBe(10);
+    expect(bubble({ ...spec, tailX: 10.4 }).anchor.x).toBe(10);
+    expect(bubble({ ...spec, tailX: -50 }).anchor.x).toBe(4);
+    expect(bubble({ ...spec, tailX: 999 }).anchor.x).toBe(width - 5);
+    expect(bubble({ ...spec, tailX: 10 }).width).toBe(width);
+  });
+
+  it("tells tones and tool states apart without colour", () => {
+    const ink = (bitmap: Bitmap, fill: number) =>
+      Array.from(bitmap.pixels, (value) => (value !== 0 && value !== fill && value !== slotIndex("outline") ? 1 : 0)).join("");
+    const shapes = [
+      ...TONES.map((tone) => bubble({ text: "go", tone, maxWidth: 60 })),
+      bubble({ text: "go", tone: "tool", status: "completed", maxWidth: 60 }),
+      bubble({ text: "go", tone: "tool", status: "failed", maxWidth: 60 }),
+      bubble({ text: "go", tone: "tool", status: "canceled", maxWidth: 60 }),
+    ].map((drawn) => `${drawn.width}:${ink(drawn, drawn.pixels[drawn.width + 2]!)}`);
+    expect(new Set(shapes).size).toBe(shapes.length);
+    // Speech has rounded corners, the tool box square ones.
+    expect(bubble({ text: "go", tone: "say" }).pixels[0]).toBe(0);
+    expect(bubble({ text: "go", tone: "tool" }).pixels[0]).toBe(slotIndex("outline"));
+  });
+
+  it("draws the words it was given", () => {
+    const plain = bubble({ text: "Lỗi", tone: "say" });
+    expect(plain).toBe(bubble({ text: "Loi", tone: "say" }));
+    expect(plain.pixels).not.toEqual(bubble({ text: "Lol", tone: "say" }).pixels);
+    expect(bubble({ text: "", tone: "say" }).width).toBe(9);
+  });
+
+  it("keeps a bounded number of drawings", () => {
+    const first = bubble({ text: "bound 0", tone: "say" });
+    for (let index = 1; index <= BUBBLE_MAX_CACHED; index++) bubble({ text: `bound ${index}`, tone: "say" });
+    const again = bubble({ text: "bound 0", tone: "say" });
     expect(again).not.toBe(first);
     expect(again.pixels).toEqual(first.pixels);
   });

@@ -5,3 +5,6 @@ export { prop, tile, PROPS, TILE, type PropId, type PropInfo, type PropOptions, 
 export { emote, EMOTE_ANCHOR, EMOTE_FRAMES, EMOTE_SIZE, type EmoteId } from "./emotes";
 export { composite, type Bitmap, type Layer, type Point } from "./grid";
 export { Sprite, anchored, devicePixelScale, spriteUri, type SpriteProps } from "./sprite";
+export { bubble, bubbleWidth, BUBBLE_HEIGHT, BUBBLE_MAX_WIDTH } from "./bubble";
+export type { BubbleSpec, BubbleStatus, BubbleTone } from "./bubble";
+export { fitText, foldText, textWidth } from "./text";
