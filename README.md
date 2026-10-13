@@ -4,6 +4,13 @@ A Paseo plugin that shows your agents as a small pixel-art office. Each workspac
 agent has a desk, and a character's pose tells you what its agent is doing: typing, waiting for
 you, finished, resting, or gone home. It lives in a side pane and is meant to be glanced at.
 
+<p>
+  <img src="docs/lobby-surface-light.png" width="582" alt="The Lobby surface in a light theme: four rooms named for invented workspaces share walls in one floor plan. Characters sit typing at desks under small tool bubbles, two finished ones stand at a pantry table with a check over their heads, one sleeps at its desk, and filing cabinets carry the counts of closed agents.">
+</p>
+
+Every picture here is drawn from an invented fleet: the workspaces, agents and messages in them do
+not exist.
+
 It adds two things to Paseo:
 
 - **Lobby tab** in a workspace's Explorer (also openable as a workspace tab): the room of that
@@ -23,6 +30,22 @@ It adds two things to Paseo:
 | Ready | at the pantry with the others who have finished, a check bobbing over its head, its screen left on; after 15 minutes, standing at its desk |
 | Idle | resting for 15 minutes (on the sofa, dozing, reading, at the shelves, stretching), then asleep at the desk |
 | Closed | no desk: it walks out, and the room's filing cabinet counts it |
+
+<p>
+  <img src="docs/lobby-pane-light.png" width="261" alt="The Lobby tab at Explorer width, light theme: one room with two agents typing, one at the pantry with a check, one resting on the sofa, one standing with a question mark and a permission bubble, a visitor by the door, and a cabinet marked 1.">
+  <img src="docs/lobby-pane-dark.png" width="261" alt="The same room in a dark theme.">
+</p>
+
+<p>
+  <img src="docs/lobby-closeup-light.png" width="520" alt="Close-up of a row of desks, enlarged: a one-word tool bubble reading Edit over one agent, a message bubble reading Tests pass over the next with its envelope lying on the recipient's desk, and a permission bubble reading Run tests? over an agent with a question mark.">
+</p>
+
+<p>
+  <img src="docs/lobby-list-light.png" width="401" alt="The List view, light theme: one row per agent with a small state icon (a monitor for working, a badge for needs you, a check for ready, Zs for idle, a cabinet for closed), its title, and the state in words beside its age.">
+</p>
+
+Dark versions: [surface](docs/lobby-surface-dark.png), [list](docs/lobby-list-dark.png),
+[close-up](docs/lobby-closeup-dark.png).
 
 - **Messages.** A message from one agent to another shows as a pixel bubble over the sender and an
   envelope that travels to the recipient's desk. A working agent's bubble names its tool in a word
