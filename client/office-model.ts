@@ -1,5 +1,5 @@
 import type { PaseoAgent } from "@getpaseo/client";
-import { activityAt, parentAgentId, roleOf, type CrewGroup, type CrewNode, type CrewState } from "./model";
+import { STATE_ORDER, activityAt, parentAgentId, roleOf, type CrewGroup, type CrewNode, type CrewState } from "./model";
 
 /**
  * The office, in tiles. A room per workspace, a pod per crew tree, a desk per
@@ -21,7 +21,7 @@ export interface Rect extends Point {
   height: number;
 }
 
-/** One desk cell: the desk on its top row, the chair under it, an aisle tile below. */
+/** One desk cell: the desk on its top row, the chair under it, an aisle row below. */
 export const DESK_WIDTH = 3;
 export const DESK_HEIGHT = 3;
 /** Most desks in one row of a pod, however wide the room is. */
@@ -32,8 +32,8 @@ const HEADER_HEIGHT = 2;
 const LOUNGE_HEIGHT = 3;
 /** The narrowest room that still holds one desk between its walls. */
 export const MIN_ROOM_WIDTH = DESK_WIDTH + 2 * WALL;
-/** On a wide surface rooms sit side by side, each about this wide. */
-export const ROOM_TARGET_WIDTH = 44;
+/** On a wide surface rooms sit side by side, each about this wide: five desks between the walls. */
+export const ROOM_TARGET_WIDTH = 17;
 
 export interface Desk {
   agentId: string;
@@ -51,8 +51,10 @@ export interface Desk {
   cell: Point;
   /** Where the character sits, facing up at the desk. */
   seat: Point;
-  /** Where the character stands when it has stepped away from the keyboard. */
+  /** Where the character stands when it has stepped away from the keyboard: beside its chair. */
   stand: Point;
+  /** The free row under the desk cell, which characters walk along. */
+  aisleY: number;
 }
 
 export interface Team {
@@ -82,6 +84,8 @@ export interface Room extends Rect {
   counts: Record<CrewState, number>;
   /** 0 needs you, 1 failed, 2 neither. Rooms are not reordered by it; a view may badge or jump. */
   urgency: 0 | 1 | 2;
+  /** Every agent in the room is closed. */
+  dormant: boolean;
   /** The strip under the top wall where a view writes the room name. */
   header: Rect;
   pods: Pod[];
@@ -210,7 +214,8 @@ function placePod(plan: PodPlan, origin: Point, workspaceId: string): Pod {
         remote: (member.agent.workspaceId ?? "") !== workspaceId,
         cell,
         seat: { x: cell.x + 1, y: cell.y + 1 },
-        stand: { x: cell.x + 1, y: cell.y + 2 },
+        stand: { x: cell.x + 2, y: cell.y + 1 },
+        aisleY: cell.y + DESK_HEIGHT - 1,
       };
     });
     teams.push({
@@ -283,6 +288,7 @@ function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
     name: group.name,
     counts: group.counts,
     urgency: group.counts["needs-input"] > 0 ? 0 : group.counts.failed > 0 ? 1 : 2,
+    dormant: isDormant(group),
     x: origin.x,
     y: origin.y,
     width,
@@ -292,6 +298,11 @@ function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
     lounge,
     agentCount,
   };
+}
+
+/** A workspace whose agents are all closed: nobody is in. */
+export function isDormant(group: CrewGroup): boolean {
+  return STATE_ORDER.every((state) => state === "closed" || group.counts[state] === 0);
 }
 
 function oldestRoot(group: CrewGroup): PaseoAgent | null {
@@ -305,7 +316,8 @@ function oldestRoot(group: CrewGroup): PaseoAgent | null {
 /**
  * Lays out the office for the groups `groupByWorkspace` returned. Rooms are
  * ordered by their oldest crew, not by urgency, so a room does not change
- * places when one of its agents starts needing you.
+ * places when one of its agents starts needing you. The one state that moves a
+ * room is its last agent closing: it joins the dormant rooms at the end.
  */
 export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOptions): Office {
   const cramped = options.width < MIN_ROOM_WIDTH;
@@ -316,6 +328,9 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
   const roomWidth = Math.floor((width - (columns - 1) * GAP) / columns);
 
   const ordered = [...groups].sort((a, b) => {
+    // Rooms nobody is in go last, so that the rooms in use keep their places among themselves.
+    const asleep = Number(isDormant(a)) - Number(isDormant(b));
+    if (asleep !== 0) return asleep;
     const left = oldestRoot(a);
     const right = oldestRoot(b);
     if (left && right) return bySeniority(left, right) || a.workspaceId.localeCompare(b.workspaceId);

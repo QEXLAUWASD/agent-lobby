@@ -152,6 +152,18 @@ export interface TimelineItemLike {
 const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
 const EXCHANGE_EVENTS: readonly string[] = ["message", ...NOTIFICATION_EVENTS];
+
+/** A notification's body is the daemon's boilerplate ("Agent 7510… finished"); the bubble says what happened. */
+const NOTIFICATION_TEXT: Record<Exclude<ExchangeEvent, "message">, string> = {
+  finished: "Done",
+  errored: "Failed",
+  "permission-required": "Needs permission",
+  closed: "Closed",
+};
+
+function exchangeText(event: ExchangeEvent, body: string): string {
+  return event === "message" ? firstLine(body) : NOTIFICATION_TEXT[event];
+}
 const TOOL_STATUSES: readonly string[] = ["running", "completed", "failed", "canceled"];
 
 interface ItemContext {
@@ -174,15 +186,16 @@ function exchangeFromToolCall(item: TimelineItemLike, context: ItemContext): Fee
   const id = tagged ? callId.slice(AGENT_MESSAGE_CALL_PREFIX.length) : callId;
   if (!id) return null;
   const detail = item.detail as { text?: unknown } | null | undefined;
-  const event = text(carried?.event);
+  const named = text(carried?.event);
+  const event = named && EXCHANGE_EVENTS.includes(named) ? (named as ExchangeEvent) : "message";
   return {
     kind: "exchange",
     id,
     from: text(carried?.sender?.id) || null,
     fromTitle: text(carried?.sender?.title) || null,
     to: context.agentId,
-    event: event && EXCHANGE_EVENTS.includes(event) ? (event as ExchangeEvent) : "message",
-    text: firstLine(text(carried?.text) ?? text(detail?.text) ?? ""),
+    event,
+    text: exchangeText(event, text(carried?.text) ?? text(detail?.text) ?? ""),
     at: context.at,
     ...(context.seq === undefined ? {} : { seq: context.seq }),
   };
@@ -204,7 +217,7 @@ function eventsFromItem(item: TimelineItemLike | null | undefined, context: Item
           fromTitle: envelope.fromTitle,
           to: context.agentId,
           event: envelope.event,
-          text: firstLine(envelope.text),
+          text: exchangeText(envelope.event, envelope.text),
           at: context.at,
           ...seq,
         },
@@ -413,7 +426,8 @@ function post(draft: Draft, bubble: Bubble): void {
   if (current && current.key !== bubble.key) {
     const alive = current.expiresAt > bubble.at;
     if (alive && TONE_RANK[current.tone] > TONE_RANK[bubble.tone]) return;
-    if (bubble.at < current.at) return;
+    // History is stamped earlier than what is live; it may still be louder.
+    if (bubble.at < current.at && TONE_RANK[bubble.tone] <= TONE_RANK[current.tone]) return;
   }
   draft.bubbles.set(bubble.agentId, bubble);
 }

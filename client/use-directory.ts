@@ -50,8 +50,9 @@ export async function fetchWorkspaces(paseo: PaseoApi): Promise<Map<string, Pase
 }
 
 /**
- * One full load, then live `agent_update` events applied in place. The
- * backstop refetch only guards against a missed event; it is not the feed.
+ * One full load, then live `agent_update` events from one list subscription
+ * applied in place. The backstop refetch only guards against a missed event;
+ * it is not the feed.
  */
 export function useDirectory(paseo: PaseoApi): Directory {
   const [agents, setAgents] = useState<Map<string, PaseoAgent>>(() => new Map());
@@ -97,6 +98,18 @@ export function useDirectory(paseo: PaseoApi): Directory {
         return next;
       });
     });
+    // `agents.subscribe` only hears what a subscribing list call brings in: without one, no
+    // `agent_update` arrives at all and the backstop is the only refresh. The page is irrelevant,
+    // the subscription follows the filter.
+    let disposed = false;
+    let feed: { release(): Promise<void> } | null = null;
+    void paseo.agents
+      .list({ filter: { includeArchived: false }, page: { limit: 1 }, subscribe: {} })
+      .then((result) => {
+        if (disposed) void result.subscription.release().catch(() => {});
+        else feed = result.subscription;
+      })
+      .catch(() => {});
     let workspaceTimer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribeWorkspaces = paseo.workspaces.subscribe(() => {
       if (workspaceTimer) clearTimeout(workspaceTimer);
@@ -108,6 +121,8 @@ export function useDirectory(paseo: PaseoApi): Directory {
     const backstop = setInterval(reload, BACKSTOP_MS);
     return () => {
       generation.current += 1;
+      disposed = true;
+      void feed?.release().catch(() => {});
       unsubscribeAgents();
       unsubscribeWorkspaces();
       if (workspaceTimer) clearTimeout(workspaceTimer);

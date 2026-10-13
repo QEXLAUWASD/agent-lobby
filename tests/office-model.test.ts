@@ -121,7 +121,8 @@ describe("layoutOffice", () => {
     expect(room?.pods.filter((entry) => entry.width === DESK_WIDTH).map((entry) => entry.rootId)).toEqual(["solo-1", "solo-2"]);
     const desk = layout.desks.get("meow-a");
     expect(desk?.seat).toEqual({ x: (desk?.cell.x ?? 0) + 1, y: (desk?.cell.y ?? 0) + 1 });
-    expect(desk?.stand).toEqual({ x: (desk?.cell.x ?? 0) + 1, y: (desk?.cell.y ?? 0) + 2 });
+    expect(desk?.stand).toEqual({ x: (desk?.cell.x ?? 0) + 2, y: (desk?.cell.y ?? 0) + 1 });
+    expect(desk?.aisleY).toBe((desk?.cell.y ?? 0) + 2);
   });
 
   it("does not move anyone when states change", () => {
@@ -141,7 +142,7 @@ describe("layoutOffice", () => {
 
   it("does not move anyone when agents arrive: a new teammate, a new team, a new solo, a new room", () => {
     const agents = crew();
-    const before = cells(office(agents, 48));
+    const before = cells(office(agents, 48, 1));
     const grown = [
       ...agents,
       agent({ id: "meow-d" }, "nexus"),
@@ -182,6 +183,16 @@ describe("layoutOffice", () => {
     expect(layout.roomOf.get("urgent")).toBe("ws-new");
   });
 
+  it("puts rooms nobody is in after the rooms in use", () => {
+    const shut = agent({ id: "shut", workspaceId: "ws-first", status: "closed" });
+    const busy = agent({ id: "busy", workspaceId: "ws-second", status: "running" });
+    const layout = office([shut, busy], 30, 1);
+    expect(layout.rooms.map((room) => [room.workspaceId, room.dormant])).toEqual([
+      ["ws-second", false],
+      ["ws-first", true],
+    ]);
+  });
+
   it("keeps a child that runs in another workspace in its crew's room and marks it remote", () => {
     const layout = office([agent({ id: "root" }), agent({ id: "away", workspaceId: "ws-b" }, "root")], 30);
     expect(layout.rooms).toHaveLength(1);
@@ -205,6 +216,8 @@ describe("layoutOffice", () => {
   it("puts rooms side by side on a wide surface, or stacks them when told to", () => {
     const agents = ["ws-a", "ws-b", "ws-c"].map((workspaceId) => agent({ id: `in-${workspaceId}`, workspaceId }));
     const wide = office(agents, 140);
+    // Seven rooms of the target width fit; they share the width evenly.
+    expect(wide.rooms.map((room) => room.width)).toEqual([19, 19, 19]);
     expect(new Set(wide.rooms.map((room) => room.y)).size).toBe(1);
     expect(new Set(wide.rooms.map((room) => room.width)).size).toBe(1);
     const stacked = office(agents, 140, 1);

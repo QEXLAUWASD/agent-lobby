@@ -26,16 +26,17 @@ export interface SceneScale {
 /**
  * The largest whole scale that still leaves a sensible room: 3× needs 24 tiles
  * across, 2× needs 8 (two desk columns between the walls), otherwise 1×. A
- * phone or an Explorer pane lands on 2×, where a character is 32 by 48.
+ * phone or an Explorer pane lands on 2×, where a character is 32 by 48. A view
+ * of many rooms caps the scale, to show more rooms rather than bigger pixels.
  */
-export function sceneScale(widthPx: number): SceneScale {
+export function sceneScale(widthPx: number, maxScale = 3): SceneScale {
   const width = Math.max(0, Math.floor(widthPx));
   for (const [scale, minTiles] of [
     [3, 24],
     [2, 8],
   ] as const) {
     const widthTiles = Math.floor(width / (TILE * scale));
-    if (widthTiles >= minTiles) return { scale, tile: TILE * scale, widthTiles };
+    if (scale <= maxScale && widthTiles >= minTiles) return { scale, tile: TILE * scale, widthTiles };
   }
   return { scale: 1, tile: TILE, widthTiles: Math.floor(width / TILE) };
 }
@@ -83,7 +84,9 @@ const MAX_WALK_MS = 3_000;
  * finish within three seconds.
  */
 export function walkLegs(from: Point, to: Point, aisleY: number): Leg[] {
-  const corners: Point[] = [from, { x: from.x, y: aisleY }, { x: to.x, y: aisleY }, to];
+  // One step sideways (out of the chair, to stand beside it) needs no detour.
+  const beside = from.y === to.y && Math.abs(from.x - to.x) <= 1;
+  const corners: Point[] = beside ? [from, to] : [from, { x: from.x, y: aisleY }, { x: to.x, y: aisleY }, to];
   const legs: Leg[] = [];
   for (let index = 1; index < corners.length; index += 1) {
     const start = corners[index - 1] as Point;

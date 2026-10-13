@@ -59,6 +59,8 @@ describe("sceneScale", () => {
     expect(sceneScale(290)).toEqual({ scale: 2, tile: 32, widthTiles: 9 });
     expect(sceneScale(255)).toEqual({ scale: 1, tile: 16, widthTiles: 15 });
     expect(sceneScale(0)).toEqual({ scale: 1, tile: 16, widthTiles: 0 });
+    // A view of many rooms caps the scale.
+    expect(sceneScale(1600, 2)).toEqual({ scale: 2, tile: 32, widthTiles: 50 });
   });
 
   it("keeps a desk cell at or above the touch minimum at every scale", () => {
@@ -92,10 +94,11 @@ describe("spriteRole and characterLabel", () => {
 });
 
 describe("walkLegs", () => {
-  it("steps from the seat to the spot under it in one leg", () => {
-    expect(walkLegs({ x: 4, y: 5 }, { x: 4, y: 6 }, 6)).toEqual([
-      { from: { x: 4, y: 5 }, to: { x: 4, y: 6 }, heading: "down", durationMs: 140 },
+  it("steps from the seat to the spot beside it in one leg", () => {
+    expect(walkLegs({ x: 4, y: 5 }, { x: 5, y: 5 }, 6)).toEqual([
+      { from: { x: 4, y: 5 }, to: { x: 5, y: 5 }, heading: "right", durationMs: 140 },
     ]);
+    expect(walkLegs({ x: 5, y: 5 }, { x: 4, y: 5 }, 6).map((leg) => leg.heading)).toEqual(["left"]);
   });
 
   it("goes down to the aisle, along it, then to the lounge, and back the same way", () => {

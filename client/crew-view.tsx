@@ -23,7 +23,7 @@ import {
   type CrewState,
 } from "./model";
 import { OfficeScene } from "./office";
-import { layoutOffice, presences as presencesOf } from "./office-model";
+import { isDormant, layoutOffice, presences as presencesOf } from "./office-model";
 import { highlighted as highlightedBy, indexNodes, sceneScale } from "./scene-model";
 import { Chip, Empty, IconButton, Muted, StatusDot, font, space, stateColor, useReducedMotion } from "./ui";
 import { useClock, useDirectory } from "./use-directory";
@@ -78,8 +78,20 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   );
 
   const office = mode === "office";
-  const scale = useMemo(() => sceneScale(size.scene), [size.scene]);
-  const groups = useMemo(() => groupByWorkspace(roots, directory.workspaces), [roots, directory.workspaces]);
+  // One room may be drawn large; a fleet is drawn at 2× to fit more rooms across.
+  const scale = useMemo(() => sceneScale(size.scene, scope === null ? 2 : 3), [size.scene, scope]);
+  const everyGroup = useMemo(() => groupByWorkspace(roots, directory.workspaces), [roots, directory.workspaces]);
+  // Across workspaces, a room nobody is in stays folded away until a search or
+  // the Closed filter singles out somebody in it.
+  const groups = useMemo(() => {
+    if (scope !== null) return everyGroup;
+    return everyGroup.filter(
+      (group) =>
+        !isDormant(group) ||
+        (highlighted !== null && candidatesOf(group.roots).some((candidate) => highlighted.has(candidate.id))),
+    );
+  }, [everyGroup, scope, highlighted]);
+  const folded = everyGroup.length - groups.length;
   const plan = useMemo(
     () =>
       layoutOffice(groups, {
@@ -214,6 +226,12 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
             />
           ))}
         </View>
+        {office && folded > 0 ? (
+          <Muted theme={theme} size={font.xs}>
+            {folded} {folded === 1 ? "workspace" : "workspaces"} with only closed agents not shown. The Closed filter
+            brings them in.
+          </Muted>
+        ) : null}
         {office && highlighted && highlighted.size === 0 ? (
           <Muted theme={theme} size={font.xs}>
             No matching agents
@@ -231,6 +249,8 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
               emptyLabel ? (
                 <Empty theme={theme} label={emptyLabel} />
               ) : null
+            ) : groups.length === 0 ? (
+              <Empty theme={theme} label="Nobody is in" />
             ) : size.scene > 0 ? (
               <OfficeScene
                 theme={theme}

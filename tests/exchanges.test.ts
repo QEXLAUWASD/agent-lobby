@@ -132,6 +132,13 @@ describe("eventsFromStream", () => {
     ]);
   });
 
+  it("says what a notification is about instead of quoting the daemon's boilerplate", () => {
+    const item = projected("n1", "meow", "Agent a1b2c3d4 (Dev A) finished.\nlast words", "finished");
+    expect(eventsFromStream(timeline("nexus", item), 1_000)[0]).toMatchObject({ event: "finished", text: "Done", from: "meow" });
+    const raw = envelope("Agent x errored", 'kind="agent-notification" source-agent-id="meow" message-id="n2" event="errored"');
+    expect(eventsFromStream(timeline("nexus", { type: "user_message", text: raw }), 1_000)[0]).toMatchObject({ text: "Failed" });
+  });
+
   it("keeps the exchange when a client stripped the sender, with nobody to draw it from", () => {
     const { agentMessage: _dropped, ...item } = projected("m1", "nexus", "hello");
     const [event] = eventsFromStream(timeline("meow", item), 1_000);
@@ -290,6 +297,12 @@ describe("reduceFeed", () => {
     let state = reduceFeed(EMPTY_FEED, [{ kind: "tool", agentId: "a", callId: "c2", name: "Read", status: "running", at: 100 }], 100);
     state = reduceFeed(state, [{ kind: "tool", agentId: "a", callId: "c1", name: "Bash", status: "running", at: 50 }], 100);
     expect(state.bubbles.get("a")?.key).toBe("c2");
+  });
+
+  it("lets a message found in history speak over the sender's newer tool bubble", () => {
+    let state = reduceFeed(EMPTY_FEED, [{ kind: "tool", agentId: "nexus", callId: "c9", name: "Bash", status: "running", at: 2_000 }], 2_000);
+    state = reduceFeed(state, [exchange("m7", 1_500)], 2_100);
+    expect(state.bubbles.get("nexus")).toMatchObject({ tone: "tell", key: "m7" });
   });
 
   it("is a pure function of its input", () => {

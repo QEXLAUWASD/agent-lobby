@@ -295,7 +295,7 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
         left: desk.cell.x * tile,
         top: desk.cell.y * tile,
         width: DESK_WIDTH * tile,
-        height: (desk.stand.y - desk.cell.y + 1) * tile,
+        height: (desk.aisleY - desk.cell.y + 1) * tile,
         borderRadius: tile / 4,
         borderWidth: selected ? Math.max(2, tile / 8) : 0,
         borderColor: theme.colors.accent,
@@ -380,7 +380,8 @@ const SpeechBubble = memo(function SpeechBubble({
           : colors.border;
   const text =
     bubble.tone === "tool" && bubble.status === "failed" ? `${bubble.text} failed` : bubble.text;
-  const box = bubbleBox(at, text, tile, officeWidth);
+  // A tool bubble carries an icon; leave room for it.
+  const box = bubbleBox(at, bubble.tone === "tool" ? `${text}   ` : text, tile, officeWidth);
   return (
     <Animated.View
       pointerEvents="none"
@@ -676,7 +677,7 @@ export function OfficeScene({
                 tile={tile}
                 agent={node.agent}
                 presence={presence}
-                aisleY={desk.stand.y}
+                aisleY={desk.aisleY}
                 saying={bubbles.get(desk.agentId)?.text ?? null}
                 selected={selected === desk.agentId}
                 dimmed={dim(desk.agentId)}
