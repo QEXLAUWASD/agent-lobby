@@ -31,6 +31,10 @@ import {
   layoutOffice,
   nextPresenceChange,
   presences as presencesOf,
+  shareOffice,
+  sharePresences,
+  type Office,
+  type Presence,
 } from "./office-model";
 import { highlighted as highlightedBy, indexNodes, sceneScale } from "./scene-model";
 import {
@@ -134,10 +138,13 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     );
   }, [everyGroup, scope, highlighted, holding]);
   const folded = everyGroup.length - groups.length;
-  const plan = useMemo(
-    () => layoutOffice(groups, { width: scale.widthTiles, agents: directory.agents, holding }),
-    [groups, scale.widthTiles, directory.agents, holding],
-  );
+  // Laid out whole each time; what came out as before is the object from before, and is not drawn again.
+  const lastPlan = useRef<Office | null>(null);
+  const plan = useMemo(() => {
+    const next = shareOffice(lastPlan.current, layoutOffice(groups, { width: scale.widthTiles, agents: directory.agents, holding }));
+    lastPlan.current = next;
+    return next;
+  }, [groups, scale.widthTiles, directory.agents, holding]);
   useEffect(() => {
     seatedBefore.current = office ? new Set(plan.desks.keys()) : NOBODY;
   }, [plan, office]);
@@ -149,10 +156,12 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     });
   }, [nodes]);
   const onLeft = useCallback((agentId: string) => setLeft((current) => new Set(current).add(agentId)), []);
-  const presences = useMemo(
-    () => presencesOf(plan, directory.agents, crewState, now),
-    [plan, directory.agents, now],
-  );
+  const lastPresences = useRef<ReadonlyMap<string, Presence> | null>(null);
+  const presences = useMemo(() => {
+    const next = sharePresences(lastPresences.current, presencesOf(plan, directory.agents, crewState, now));
+    lastPresences.current = next;
+    return next;
+  }, [plan, directory.agents, now]);
   // Only the rooms on screen compete for the live subscriptions.
   const candidates = useMemo(() => {
     const visible = inView ? new Set(inView) : null;

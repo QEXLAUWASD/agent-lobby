@@ -503,7 +503,19 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
       ) : null}
     </Pressable>
   );
-});
+},
+// A node is rebuilt whenever any agent changes; the desk is drawn again only when its own agent did.
+(before, after) =>
+  before.theme === after.theme &&
+  before.tile === after.tile &&
+  before.node.agent === after.node.agent &&
+  before.node.state === after.node.state &&
+  before.desk === after.desk &&
+  before.presence === after.presence &&
+  before.selected === after.selected &&
+  before.dimmed === after.dimmed &&
+  before.onPress === after.onPress,
+);
 
 /**
  * A pixel bubble over its speaker. It follows the character as it walks and
