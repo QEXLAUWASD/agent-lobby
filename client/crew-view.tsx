@@ -169,7 +169,9 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     const visible = inView ? new Set(inView) : null;
     return candidatesOf(groups.filter((group) => !visible || visible.has(group.workspaceId)).flatMap((group) => group.roots));
   }, [groups, inView]);
-  const feed = useFeed(paseo, candidates, { enabled: shown && office && size.scene > 0 });
+  // The scene's own size passes through nothing too; its leases are held through that like the rest.
+  const sceneShown = useShown(size.scene > 0);
+  const feed = useFeed(paseo, candidates, { enabled: shown && office && sceneShown });
 
   const openAgent = useCallback(
     (agent: PaseoAgent) => navigation?.openAgent({ agentId: agent.id, serverId: host.id }),
