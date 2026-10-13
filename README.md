@@ -60,8 +60,13 @@ row.
 ## Data
 
 One full page-walk of `agents.list` on mount and one list subscription, whose `agent_update` events
-are applied in place. A 60 s backstop only guards against a missed event. Workspace names come from
-`workspaces.list` and refresh on `workspace_update`.
+are applied in place. The subscription replays nothing after the connection drops, so when it is
+restored (it hands over a new snapshot) agents and workspaces are both loaded again; the same on
+Refresh and whenever the pane is shown again. Behind that, as a last resort, agents are refetched
+every five minutes: that is the longest a lost update can go unrepaired while the connection itself
+looks healthy. Workspace names come from `workspaces.list` and refresh on `workspace_update`, and
+when an agent turns up in a workspace not yet known. A pane the host keeps mounted behind another
+tab holds no subscription, timer or request.
 
 Speech and messages come from agent timelines. Each timeline subscription costs the daemon one, so
 the plugin keeps at most eight open per daemon connection, however many Crew panels and surfaces

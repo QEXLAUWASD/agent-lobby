@@ -1,13 +1,15 @@
 import type { PaseoAgent, PaseoApi, PaseoWorkspace } from "@getpaseo/client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { wakeDelay } from "./wake";
+import { HIDE_AFTER_MS, wakeDelay } from "./wake";
 
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10;
 /**
- * The list subscription carries every change. A refetch is only there for what
- * a subscription can lose without saying so (an event dropped while the
- * connection was down and came back): rare, so it is rare, and agents only.
+ * The list subscription carries every change while the connection holds, and
+ * says when it has been restored after a break: that is when updates can have
+ * been lost (nothing is replayed), and everything is loaded again then. This
+ * timer is only the last resort behind that: agents again, and the
+ * subscription itself again if it failed, every five minutes.
  */
 const BACKSTOP_MS = 5 * 60_000;
 const WORKSPACE_DEBOUNCE_MS = 500;
@@ -70,6 +72,8 @@ export function useDirectory(paseo: PaseoApi, shown = true): Directory {
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const generation = useRef(0);
+  const known = useRef(workspaces);
+  known.current = workspaces;
 
   const reload = useCallback(() => {
     const run = ++generation.current;
@@ -93,6 +97,7 @@ export function useDirectory(paseo: PaseoApi, shown = true): Directory {
   useEffect(() => {
     if (!shown) return;
     reload();
+    const asked = new Set<string>();
     const unsubscribeAgents = paseo.agents.subscribe((update) => {
       setAgents((current) => {
         const next = new Map(current);
@@ -107,28 +112,61 @@ export function useDirectory(paseo: PaseoApi, shown = true): Directory {
         next.set(update.agent.id, update.agent);
         return next;
       });
+      // An agent in a workspace nobody has told us about: its event was missed, so ask, once for each.
+      const workspaceId = update.kind === "remove" ? null : update.agent.workspaceId;
+      if (workspaceId && !known.current.has(workspaceId) && !asked.has(workspaceId)) {
+        asked.add(workspaceId);
+        refreshWorkspaces();
+      }
     });
     // `agents.subscribe` only hears what a subscribing list call brings in: without one, no
-    // `agent_update` arrives at all and the backstop is the only refresh. The page is irrelevant,
-    // the subscription follows the filter.
+    // `agent_update` arrives at all. The page is irrelevant, the subscription follows the filter.
     let disposed = false;
     let feed: { release(): Promise<void> } | null = null;
-    void paseo.agents
-      .list({ filter: { includeArchived: false }, page: { limit: 1 }, subscribe: {} })
-      .then((result) => {
-        if (disposed) void result.subscription.release().catch(() => {});
-        else feed = result.subscription;
-      })
-      .catch(() => {});
+    let opening = false;
+    const openFeed = () => {
+      if (disposed || feed || opening) return;
+      opening = true;
+      void paseo.agents
+        .list({ filter: { includeArchived: false }, page: { limit: 1 }, subscribe: {} })
+        .then((result) => {
+          if (disposed) {
+            void result.subscription.release().catch(() => {});
+            return;
+          }
+          const mine = result.subscription;
+          feed = mine;
+          const first = result.subscriptionId;
+          mine.subscribe({
+            // The snapshot this call returned comes round once more here. Any other is the subscription
+            // set up again after the connection came back: updates sent in between were not kept.
+            snapshot(snapshot) {
+              if (snapshot.subscriptionId !== first) reload();
+            },
+            update() {},
+            // The SDK has released it; the timer below opens another.
+            error() {
+              if (feed === mine) feed = null;
+            },
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          opening = false;
+        });
+    };
+    openFeed();
     let workspaceTimer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribeWorkspaces = paseo.workspaces.subscribe(() => {
+    const refreshWorkspaces = () => {
       if (workspaceTimer) clearTimeout(workspaceTimer);
       workspaceTimer = setTimeout(() => {
         workspaceTimer = null;
         void fetchWorkspaces(paseo).then(setWorkspaces).catch(() => {});
       }, WORKSPACE_DEBOUNCE_MS);
-    });
+    };
+    const unsubscribeWorkspaces = paseo.workspaces.subscribe(refreshWorkspaces);
     const backstop = setInterval(() => {
+      openFeed();
       const run = generation.current;
       void fetchAgents(paseo)
         .then((loaded) => {
@@ -180,4 +218,21 @@ export function useWake(at: number | null, turn: number, onWake: () => void): vo
     const timer = setTimeout(() => latest.current(), delay);
     return () => clearTimeout(timer);
   }, [at, turn]);
+}
+
+/**
+ * Whether the pane counts as shown: at once when it has a size, and only after
+ * it has had none for `HIDE_AFTER_MS` when it has not.
+ */
+export function useShown(sized: boolean): boolean {
+  const [held, setHeld] = useState(sized);
+  useEffect(() => {
+    if (sized) {
+      setHeld(true);
+      return;
+    }
+    const timer = setTimeout(() => setHeld(false), HIDE_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [sized]);
+  return sized || held;
 }
