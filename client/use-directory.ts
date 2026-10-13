@@ -1,9 +1,15 @@
 import type { PaseoAgent, PaseoApi, PaseoWorkspace } from "@getpaseo/client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { wakeDelay } from "./wake";
 
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10;
-const BACKSTOP_MS = 60_000;
+/**
+ * The list subscription carries every change. A refetch is only there for what
+ * a subscription can lose without saying so (an event dropped while the
+ * connection was down and came back): rare, so it is rare, and agents only.
+ */
+const BACKSTOP_MS = 5 * 60_000;
 const WORKSPACE_DEBOUNCE_MS = 500;
 
 export interface Directory {
@@ -53,8 +59,11 @@ export async function fetchWorkspaces(paseo: PaseoApi): Promise<Map<string, Pase
  * One full load, then live `agent_update` events from one list subscription
  * applied in place. The backstop refetch only guards against a missed event;
  * it is not the feed.
+ *
+ * While `shown` is false nothing is held: no subscription, no timer, no
+ * request. What was loaded stays as it was, and showing again loads once.
  */
-export function useDirectory(paseo: PaseoApi): Directory {
+export function useDirectory(paseo: PaseoApi, shown = true): Directory {
   const [agents, setAgents] = useState<Map<string, PaseoAgent>>(() => new Map());
   const [workspaces, setWorkspaces] = useState<Map<string, PaseoWorkspace>>(() => new Map());
   const [phase, setPhase] = useState<Directory["phase"]>("loading");
@@ -68,7 +77,7 @@ export function useDirectory(paseo: PaseoApi): Directory {
       try {
         const [loaded, loadedWorkspaces] = await Promise.all([fetchAgents(paseo), fetchWorkspaces(paseo)]);
         if (run !== generation.current) return;
-        setAgents(loaded.agents);
+        setAgents((current) => keepKnown(current, loaded.agents));
         setWorkspaces(loadedWorkspaces);
         setTruncated(loaded.truncated);
         setError(null);
@@ -82,6 +91,7 @@ export function useDirectory(paseo: PaseoApi): Directory {
   }, [paseo]);
 
   useEffect(() => {
+    if (!shown) return;
     reload();
     const unsubscribeAgents = paseo.agents.subscribe((update) => {
       setAgents((current) => {
@@ -118,7 +128,17 @@ export function useDirectory(paseo: PaseoApi): Directory {
         void fetchWorkspaces(paseo).then(setWorkspaces).catch(() => {});
       }, WORKSPACE_DEBOUNCE_MS);
     });
-    const backstop = setInterval(reload, BACKSTOP_MS);
+    const backstop = setInterval(() => {
+      const run = generation.current;
+      void fetchAgents(paseo)
+        .then((loaded) => {
+          // A reload since then has newer news.
+          if (run !== generation.current) return;
+          setAgents((current) => keepKnown(current, loaded.agents));
+          setTruncated(loaded.truncated);
+        })
+        .catch(() => {});
+    }, BACKSTOP_MS);
     return () => {
       generation.current += 1;
       disposed = true;
@@ -128,16 +148,36 @@ export function useDirectory(paseo: PaseoApi): Directory {
       if (workspaceTimer) clearTimeout(workspaceTimer);
       clearInterval(backstop);
     };
-  }, [paseo, reload]);
+  }, [paseo, reload, shown]);
 
   return { agents, workspaces, phase, error, truncated, reload };
 }
 
-export function useClock(intervalMs = 15_000): number {
-  const [now, setNow] = useState(() => Date.now());
+/**
+ * A refetch brings every agent as a new object. Whoever reads the same as
+ * before keeps the object it had, and a refetch that brought nothing new keeps
+ * the whole map, so that it draws nothing.
+ */
+function keepKnown(before: Map<string, PaseoAgent>, after: Map<string, PaseoAgent>): Map<string, PaseoAgent> {
+  let same = before.size === after.size;
+  const out = new Map<string, PaseoAgent>();
+  for (const [id, agent] of after) {
+    const known = before.get(id);
+    const kept = known && JSON.stringify(known) === JSON.stringify(agent) ? known : agent;
+    if (kept !== known) same = false;
+    out.set(id, kept);
+  }
+  return same ? before : out;
+}
+
+/** Runs `onWake` once, just past `at`; nothing while `at` is null. `turn` re-arms it for the same moment. */
+export function useWake(at: number | null, turn: number, onWake: () => void): void {
+  const latest = useRef(onWake);
+  latest.current = onWake;
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(timer);
-  }, [intervalMs]);
-  return now;
+    const delay = wakeDelay(at, Date.now());
+    if (delay === null) return;
+    const timer = setTimeout(() => latest.current(), delay);
+    return () => clearTimeout(timer);
+  }, [at, turn]);
 }

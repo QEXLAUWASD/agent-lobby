@@ -838,11 +838,11 @@ function hash(value: string): number {
  * at once nor ever stand still for a whole break; within a stretch the answer
  * does not change.
  */
-export function breakStretch(agentId: string, now: number): { index: number; startedAt: number } {
+export function breakStretch(agentId: string, now: number): { index: number; startedAt: number; endsAt: number } {
   const dwell = BREAK_DWELL_MIN_MS + (hash(`${agentId}/dwell`) % BREAK_DWELL_SPREAD_MS);
   const phase = hash(`${agentId}/phase`) % dwell;
   const index = Math.floor((now + phase) / dwell);
-  return { index, startedAt: index * dwell - phase };
+  return { index, startedAt: index * dwell - phase, endsAt: (index + 1) * dwell - phase };
 }
 
 export interface Idler {
@@ -1102,4 +1102,99 @@ export function presences(
     });
   }
   return out;
+}
+
+/**
+ * The next moment at which `presences` gives a different answer though no
+ * agent has changed: somebody's stretch of a break ends and it may move on, or
+ * its break is over and it goes back to its desk. Null when nobody is on a
+ * break: then nothing in the office changes until an agent does.
+ */
+export function nextPresenceChange(
+  office: Office,
+  agents: ReadonlyMap<string, PaseoAgent>,
+  stateOf: (agent: PaseoAgent) => CrewState,
+  now: number,
+): number | null {
+  let next: number | null = null;
+  for (const agentId of office.desks.keys()) {
+    const agent = agents.get(agentId);
+    if (!agent) continue;
+    const state = stateOf(agent);
+    if ((state !== "idle" && state !== "ready") || !onBreak(agent, now)) continue;
+    const at = Math.min(Date.parse(activityAt(agent)) + WANDER_MS, breakStretch(agentId, now).endsAt);
+    if (at > now && (next === null || at < next)) next = at;
+  }
+  return next;
+}
+
+/** Plain data compared by what it holds: arrays and objects all the way down. */
+function alike(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  return keys.every((key) => key in right && alike(left[key], right[key]));
+}
+
+function shareEntries<Value>(before: ReadonlyMap<string, Value>, after: ReadonlyMap<string, Value>): ReadonlyMap<string, Value> {
+  let same = before.size === after.size;
+  const out = new Map<string, Value>();
+  for (const [key, value] of after) {
+    const old = before.get(key);
+    const kept = old !== undefined && alike(old, value) ? old : value;
+    if (kept !== old) same = false;
+    out.set(key, kept);
+  }
+  // Order is part of a map: the scene draws in it.
+  if (same) {
+    const order = before.keys();
+    for (const key of after.keys()) if (order.next().value !== key) return out;
+    return before;
+  }
+  return out;
+}
+
+/**
+ * `after`, with every room, desk and visitor that is the same as in `before`
+ * being the very object from `before`. A layout is computed whole each time an
+ * agent changes; with this, what did not change is seen not to have, and only
+ * what did is drawn again.
+ */
+export function shareOffice(before: Office | null, after: Office): Office {
+  if (!before) return after;
+  const old = new Map(before.rooms.map((room) => [room.workspaceId, room]));
+  const rooms = after.rooms.map((room) => {
+    const known = old.get(room.workspaceId);
+    return known && alike(known, room) ? known : room;
+  });
+  const sameRooms = rooms.length === before.rooms.length && rooms.every((room, index) => room === before.rooms[index]);
+  const desks = shareEntries(before.desks, after.desks);
+  const roomOf = shareEntries(before.roomOf, after.roomOf);
+  const visitors = shareEntries(before.visitors, after.visitors);
+  const building = alike(before.building, after.building) ? before.building : after.building;
+  if (
+    sameRooms &&
+    desks === before.desks &&
+    roomOf === before.roomOf &&
+    visitors === before.visitors &&
+    building === before.building &&
+    before.width === after.width &&
+    before.height === after.height &&
+    before.cramped === after.cramped
+  ) {
+    return before;
+  }
+  return { ...after, rooms: sameRooms ? before.rooms : rooms, desks, roomOf, visitors, building };
+}
+
+/** The same for presences: whoever is doing what it was doing keeps its object. */
+export function sharePresences(
+  before: ReadonlyMap<string, Presence> | null,
+  after: ReadonlyMap<string, Presence>,
+): ReadonlyMap<string, Presence> {
+  return before ? shareEntries(before, after) : after;
 }

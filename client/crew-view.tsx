@@ -18,6 +18,7 @@ import {
   roleOf,
   activityAt,
   formatAge,
+  nextAgeChange,
   STATE_LABEL,
   STATE_ORDER,
   summary,
@@ -25,7 +26,12 @@ import {
   type CrewState,
 } from "./model";
 import { OfficeScene } from "./office";
-import { isDormant, layoutOffice, presences as presencesOf } from "./office-model";
+import {
+  isDormant,
+  layoutOffice,
+  nextPresenceChange,
+  presences as presencesOf,
+} from "./office-model";
 import { highlighted as highlightedBy, indexNodes, sceneScale } from "./scene-model";
 import {
   Chip,
@@ -40,8 +46,9 @@ import {
   stateColor,
   useReducedMotion,
 } from "./ui";
-import { useClock, useDirectory } from "./use-directory";
+import { useDirectory, useWake } from "./use-directory";
 import { useFeed } from "./use-feed";
+import { nextWake, paneShown } from "./wake";
 
 type Filter = CrewState | "all";
 type Mode = "office" | "list";
@@ -61,8 +68,13 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const [allWorkspaces, setAllWorkspaces] = useState(false);
   const scope = inPanel && !allWorkspaces ? homeScope : null;
   const paseo = usePaseo();
-  const now = useClock();
-  const directory = useDirectory(paseo);
+  const [size, setSize] = useState({ view: 0, height: 0, scene: 0 });
+  // The host keeps a pane mounted behind another tab; then nothing here runs.
+  const shown = paneShown(size.view, size.height);
+  const directory = useDirectory(paseo, shown);
+  // Time moves here only when something drawn depends on it: see `wakeAt`.
+  const [turn, setTurn] = useState(0);
+  const now = useMemo(() => Date.now(), [turn, directory.agents, shown]);
   const actions = useAgentActions(paseo);
   const reducedMotion = useReducedMotion();
   const [mode, setMode] = useState<Mode>("office");
@@ -71,7 +83,6 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const [selected, setSelected] = useState<string | null>(null);
   // The room whose closed agents are listed in the dock.
   const [closedRoom, setClosedRoom] = useState<string | null>(null);
-  const [size, setSize] = useState({ view: 0, scene: 0 });
   const [inView, setInView] = useState<readonly string[] | null>(null);
   const { colors } = theme;
   const { setDialog, respond, busy } = actions;
@@ -147,7 +158,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     const visible = inView ? new Set(inView) : null;
     return candidatesOf(groups.filter((group) => !visible || visible.has(group.workspaceId)).flatMap((group) => group.roots));
   }, [groups, inView]);
-  const feed = useFeed(paseo, candidates, { enabled: office && size.scene > 0 });
+  const feed = useFeed(paseo, candidates, { enabled: shown && office && size.scene > 0 });
 
   const openAgent = useCallback(
     (agent: PaseoAgent) => navigation?.openAgent({ agentId: agent.id, serverId: host.id }),
@@ -213,8 +224,20 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const column = !inPanel ? { width: "100%" as const, maxWidth: 720, alignSelf: "center" as const } : null;
   const onViewLayout = (event: LayoutChangeEvent) => {
     const width = Math.round(event.nativeEvent.layout.width);
-    setSize((current) => (current.view === width ? current : { ...current, view: width }));
+    const height = Math.round(event.nativeEvent.layout.height);
+    setSize((current) => (current.view === width && current.height === height ? current : { ...current, view: width, height }));
   };
+  // The one timer of a view at rest: the next break that moves on or ends, or the next age that reads differently.
+  const wakeAt = useMemo(() => {
+    if (!shown) return null;
+    const aged = office ? (closedList?.nodes ?? []) : [...nodes.values()];
+    return nextWake(
+      office ? nextPresenceChange(plan, directory.agents, crewState, now) : null,
+      aged.map((node) => nextAgeChange(activityAt(node.agent), now)),
+      now,
+    );
+  }, [shown, office, closedList, nodes, plan, directory.agents, now]);
+  useWake(wakeAt, turn, () => setTurn((count) => count + 1));
   const onSceneLayout = (event: LayoutChangeEvent) => {
     const width = Math.round(event.nativeEvent.layout.width);
     setSize((current) => (current.scene === width ? current : { ...current, scene: width }));

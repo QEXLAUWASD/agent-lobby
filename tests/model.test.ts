@@ -9,6 +9,7 @@ import {
   formatAge,
   groupByWorkspace,
   matches,
+  nextAgeChange,
   summary,
 } from "../client/model";
 
@@ -116,5 +117,26 @@ describe("helpers", () => {
     expect(matches(a, "MEOW", null)).toBe(true);
     expect(matches(a, "alpha", "Alpha")).toBe(true);
     expect(matches(a, "nope", null)).toBe(false);
+  });
+});
+
+describe("nextAgeChange", () => {
+  const then = Date.parse("2026-09-22T10:00:00.000Z");
+  const iso = new Date(then).toISOString();
+
+  it("is the very moment the age reads differently, for ages from seconds to weeks", () => {
+    const minute = 60_000;
+    for (const age of [0, 10_000, 44_999, 45_000, 80_000, 29.4 * minute, 29.5 * minute, 58 * minute, 59.6 * minute, 90 * minute, 5.2 * 60 * minute, 23.2 * 60 * minute, 23.6 * 60 * minute, 40 * 60 * minute, 9.7 * 24 * 60 * minute]) {
+      const now = then + age;
+      const next = nextAgeChange(iso, now);
+      expect(next).not.toBeNull();
+      expect(next!).toBeGreaterThan(now);
+      expect(formatAge(iso, next! - 1)).toBe(formatAge(iso, now));
+      expect(formatAge(iso, next!)).not.toBe(formatAge(iso, now));
+    }
+  });
+
+  it("has nothing to wait for when the timestamp cannot be read", () => {
+    expect(nextAgeChange("not a date", then)).toBeNull();
   });
 });

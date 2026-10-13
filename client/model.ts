@@ -61,6 +61,27 @@ export function formatAge(iso: string, now: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+/**
+ * When `formatAge` next says something else for this timestamp; null for one
+ * it cannot read. A view that shows ages sleeps until then.
+ */
+export function nextAgeChange(iso: string, now: number): number | null {
+  const then = Date.parse(iso);
+  const ms = now - then;
+  if (!Number.isFinite(ms)) return null;
+  if (ms < 45_000) return then + 45_000;
+  const minutes = Math.round(ms / 60_000);
+  // Each unit is the rounding of the one below it, so its boundaries sit half a step early, twice over.
+  let at: number;
+  if (minutes < 60) at = (minutes + 0.5) * 60_000;
+  else {
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) at = ((hours + 0.5) * 60 - 0.5) * 60_000;
+    else at = (((Math.round(hours / 24) + 0.5) * 24 - 0.5) * 60 - 0.5) * 60_000;
+  }
+  return then + Math.ceil(at);
+}
+
 export function displayTitle(agent: PaseoAgent): string {
   const title = agent.title?.trim();
   if (title) return title;

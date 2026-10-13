@@ -15,8 +15,11 @@ import {
   breakStretch,
   fitZones,
   layoutOffice,
+  nextPresenceChange,
   presenceOf,
   presences,
+  shareOffice,
+  sharePresences,
   type Office,
   type Rect,
   type Room,
@@ -784,5 +787,90 @@ describe("candidatesOf", () => {
       ["root", "working"],
       ["kid", "idle"],
     ]);
+  });
+});
+
+describe("nextPresenceChange", () => {
+  const start = Date.parse("2026-10-13T08:00:00.000Z");
+  const at = (ms: number) => new Date(start + ms).toISOString();
+  const directory = (agents: PaseoAgent[]) => new Map(agents.map((entry) => [entry.id, entry]));
+
+  it("is null when nobody is on a break: working, asking, failed, closed, or idle for longer than a break", () => {
+    const agents = [
+      agent({ id: "busy", status: "running", updatedAt: at(0) }),
+      agent({ id: "old", status: "idle", updatedAt: at(-WANDER_MS - 1) }),
+      agent({ id: "shut", status: "closed", updatedAt: at(0) }),
+    ];
+    expect(nextPresenceChange(office(agents, 20), directory(agents), crewState, start + 1_000)).toBeNull();
+  });
+
+  it("is a moment after now, no later than the end of the break, and nothing changes before it", () => {
+    const agents = [
+      agent({ id: "busy", status: "running", updatedAt: at(0) }),
+      agent({ id: "resting", status: "idle", updatedAt: at(0) }),
+      agent({ id: "resting-too", status: "idle", updatedAt: at(40_000) }),
+    ];
+    const layout = office(agents, 20);
+    const all = directory(agents);
+    const spots = (now: number) =>
+      JSON.stringify([...presences(layout, all, crewState, now)].map(([id, presence]) => [id, presence.activity, presence.at, presence.act]));
+    let now = start + 60_000;
+    let wakes = 0;
+    // Wake by wake through the whole break and past it.
+    for (;;) {
+      const next = nextPresenceChange(layout, all, crewState, now);
+      if (next === null) break;
+      expect(next).toBeGreaterThan(now);
+      expect(next).toBeLessThanOrEqual(start + 40_000 + WANDER_MS);
+      // Checked a few times on the way: the office is as it was at the last wake.
+      for (const share of [0.25, 0.5, 0.999]) expect(spots(now + (next - 1 - now) * share)).toBe(spots(now));
+      now = next;
+      wakes += 1;
+      expect(wakes).toBeLessThan(40);
+    }
+    expect(now).toBe(start + 40_000 + WANDER_MS);
+    expect(wakes).toBeGreaterThan(2);
+    // After the last wake everybody is back at a desk.
+    expect([...presences(layout, all, crewState, now).values()].map((presence) => presence.activity).sort()).toEqual(["asleep", "asleep", "typing"]);
+  });
+});
+
+describe("shareOffice and sharePresences", () => {
+  const directory = (agents: PaseoAgent[]) => new Map(agents.map((entry) => [entry.id, entry]));
+
+  it("is the earlier office itself when the layout came out the same", () => {
+    const agents = crew();
+    const before = office(agents, 31);
+    expect(shareOffice(before, office(agents, 31))).toBe(before);
+    expect(shareOffice(null, before)).toBe(before);
+  });
+
+  it("keeps the objects of everything a change did not touch", () => {
+    const agents = [...crew(), agent({ id: "elsewhere", workspaceId: "ws-b" }), agent({ id: "other-1", workspaceId: "ws-c" })];
+    const before = office(agents, 48);
+    // One more agent in ws-c: that room changes, and whatever has to move for it.
+    const after = shareOffice(before, office([...agents, agent({ id: "other-2", workspaceId: "ws-c" })], 48));
+    expect(after).not.toBe(before);
+    const fresh = office([...agents, agent({ id: "other-2", workspaceId: "ws-c" })], 48);
+    expect(after).toEqual(fresh);
+    const room = (layout: Office, id: string) => layout.rooms.find((entry) => entry.workspaceId === id);
+    expect(room(after, "ws-c")).not.toBe(room(before, "ws-c"));
+    const untouched = after.rooms.filter((entry) => before.rooms.includes(entry));
+    expect(untouched.length).toBeGreaterThan(0);
+    for (const entry of untouched) expect(entry).toEqual(room(fresh, entry.workspaceId));
+    expect(after.desks.get("meow-a")).toBe(before.desks.get("meow-a"));
+    expect(after.desks.has("other-2")).toBe(true);
+  });
+
+  it("keeps the presence of whoever goes on as before, and replaces the one that changed", () => {
+    const agents = crew();
+    const layout = office(agents, 31);
+    const before = presences(layout, directory(agents), crewState, 0);
+    const changed = agents.map((entry) => (entry.id === "meow-b" ? { ...entry, status: "running" as const } : entry));
+    const after = sharePresences(before, presences(layout, directory(changed), crewState, 0));
+    expect(after.get("meow-a")).toBe(before.get("meow-a"));
+    expect(after.get("meow-b")).not.toBe(before.get("meow-b"));
+    expect(after.get("meow-b")?.activity).toBe("typing");
+    expect(sharePresences(before, presences(layout, directory(agents), crewState, 0))).toBe(before);
   });
 });
