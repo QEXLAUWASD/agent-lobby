@@ -252,78 +252,89 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     setSize((current) => (current.scene === width ? current : { ...current, scene: width }));
   };
 
+  // The header is the same from one agent's update to the next unless a count moved: it is not drawn again for each.
+  const countsKey = STATE_ORDER.map((state) => counts[state]).join(",");
+  const noMatches = office && highlighted !== null && highlighted.size === 0;
+  const header = useMemo(
+    () => (
+        <View style={[{ paddingHorizontal: space.lg, paddingTop: space.md, gap: space.sm }, office ? null : column]}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+            {directory.phase === "loading" ? (
+              <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                <StatusDot theme={theme} state="working" pulse />
+                <Muted theme={theme} size={font.sm}>
+                  Loading agents
+                </Muted>
+              </View>
+            ) : (
+              <Muted theme={theme} size={font.sm} style={{ flex: 1 }}>
+                {summary(counts)}
+                {directory.truncated ? " · first 2000" : ""}
+              </Muted>
+            )}
+            <Chip theme={theme} label="Office" selected={office} onPress={() => setMode("office")} />
+            <Chip theme={theme} label="List" selected={!office} onPress={() => setMode("list")} />
+            <IconButton theme={theme} icon="RefreshCw" label="Refresh" onPress={directory.reload} />
+          </View>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Find an agent"
+            placeholderTextColor={colors.foregroundMuted}
+            autoCorrect={false}
+            style={{
+              height: 32,
+              paddingHorizontal: space.md,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: colors.border,
+              color: colors.foreground,
+              fontSize: font.base,
+            }}
+          />
+          {inPanel ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+              <Chip theme={theme} label="This workspace" selected={!allWorkspaces} onPress={() => setAllWorkspaces(false)} />
+              <Chip theme={theme} label="All workspaces" selected={allWorkspaces} onPress={() => setAllWorkspaces(true)} />
+            </View>
+          ) : null}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+            <Chip theme={theme} label="All" selected={filter === "all"} onPress={() => setFilter("all")} />
+            {chips.map((state) => (
+              <Chip
+                key={state}
+                theme={theme}
+                label={STATE_LABEL[state]}
+                count={counts[state]}
+                color={stateColor(theme, state)}
+                selected={filter === state}
+                onPress={() => setFilter(filter === state ? "all" : state)}
+              />
+            ))}
+          </View>
+          {office && folded > 0 ? (
+            <Muted theme={theme} size={font.xs}>
+              {folded} {folded === 1 ? "workspace" : "workspaces"} with only closed agents not shown. The Closed filter
+              brings them in.
+            </Muted>
+          ) : null}
+          {office && highlighted && highlighted.size === 0 ? (
+            <Muted theme={theme} size={font.xs}>
+              No matching agents
+            </Muted>
+          ) : null}
+          {directory.error ? (
+            <Text style={{ color: colors.statusDanger, fontSize: font.xs }}>{directory.error}</Text>
+          ) : null}
+        </View>
+    ),
+    // `counts` and `chips` are read through `countsKey`, `column` through `inPanel`.
+    [theme, office, inPanel, allWorkspaces, directory.phase, directory.truncated, directory.error, directory.reload, countsKey, query, filter, folded, noMatches],
+  );
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface0 }} onLayout={onViewLayout}>
-      <View style={[{ paddingHorizontal: space.lg, paddingTop: space.md, gap: space.sm }, office ? null : column]}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          {directory.phase === "loading" ? (
-            <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <StatusDot theme={theme} state="working" pulse />
-              <Muted theme={theme} size={font.sm}>
-                Loading agents
-              </Muted>
-            </View>
-          ) : (
-            <Muted theme={theme} size={font.sm} style={{ flex: 1 }}>
-              {summary(counts)}
-              {directory.truncated ? " · first 2000" : ""}
-            </Muted>
-          )}
-          <Chip theme={theme} label="Office" selected={office} onPress={() => setMode("office")} />
-          <Chip theme={theme} label="List" selected={!office} onPress={() => setMode("list")} />
-          <IconButton theme={theme} icon="RefreshCw" label="Refresh" onPress={directory.reload} />
-        </View>
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Find an agent"
-          placeholderTextColor={colors.foregroundMuted}
-          autoCorrect={false}
-          style={{
-            height: 32,
-            paddingHorizontal: space.md,
-            borderRadius: 8,
-            borderWidth: 1,
-            borderColor: colors.border,
-            color: colors.foreground,
-            fontSize: font.base,
-          }}
-        />
-        {inPanel ? (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
-            <Chip theme={theme} label="This workspace" selected={!allWorkspaces} onPress={() => setAllWorkspaces(false)} />
-            <Chip theme={theme} label="All workspaces" selected={allWorkspaces} onPress={() => setAllWorkspaces(true)} />
-          </View>
-        ) : null}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
-          <Chip theme={theme} label="All" selected={filter === "all"} onPress={() => setFilter("all")} />
-          {chips.map((state) => (
-            <Chip
-              key={state}
-              theme={theme}
-              label={STATE_LABEL[state]}
-              count={counts[state]}
-              color={stateColor(theme, state)}
-              selected={filter === state}
-              onPress={() => setFilter(filter === state ? "all" : state)}
-            />
-          ))}
-        </View>
-        {office && folded > 0 ? (
-          <Muted theme={theme} size={font.xs}>
-            {folded} {folded === 1 ? "workspace" : "workspaces"} with only closed agents not shown. The Closed filter
-            brings them in.
-          </Muted>
-        ) : null}
-        {office && highlighted && highlighted.size === 0 ? (
-          <Muted theme={theme} size={font.xs}>
-            No matching agents
-          </Muted>
-        ) : null}
-        {directory.error ? (
-          <Text style={{ color: colors.statusDanger, fontSize: font.xs }}>{directory.error}</Text>
-        ) : null}
-      </View>
+      {header}
 
       {office ? (
         <View style={{ flex: 1, flexDirection: sideDock ? "row" : "column", paddingTop: space.sm }}>
@@ -352,6 +363,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                 onOpenClosed={openClosed}
                 available={size.scene}
                 onRoomsInView={setInView}
+                inView={inView}
               />
             ) : null}
           </View>
