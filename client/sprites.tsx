@@ -1,23 +1,39 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { memo } from "react";
 import { View } from "react-native";
-import type { Emote, LoungeSpotKind, Room } from "./office-model";
-import { lookFor, officePalette, paletteColor, type Slot } from "./pixel/palette";
+import type { Emote, Room } from "./office-model";
+import {
+  Sprite,
+  anchored,
+  character,
+  composite,
+  emote,
+  lookFor,
+  officePalette,
+  prop,
+  tile as tileBitmap,
+  TILE as ART_TILE,
+  type CharacterPose as ArtPose,
+  type EmoteId,
+  type Bitmap,
+  type Facing,
+  type Layer,
+} from "./pixel";
 import { CHARACTER_HEIGHT, type Heading, type SpriteRole } from "./scene-model";
 
 /**
- * The only module of the scene that draws. Everything here is a stand-in made
- * of plain Views until the sprite catalogue in `client/pixel/` lands; the scene
- * calls these components and nothing else, so binding the art means rewriting
- * the bodies below and not one line of `office.tsx`.
+ * The only module of the scene that knows the sprite catalogue in
+ * `client/pixel/`. The scene asks for a character, a desk, a room; this maps
+ * the ask to a drawing and places its anchor.
  *
- * Sizes are in tiles and every component fills the box the scene gives it:
- * a character 1 × 1.5, a desk 2 × 1, a chair 1 × 1, an emote 1 × 1,
- * lounge furniture 1 × 1, a message marker 1 × 1.
+ * Sizes are in tiles and every component fills the box the scene gives it,
+ * drawing past its top edge where the art is taller: a character 1 × 1.5,
+ * a desk 2 × 1 with its monitor rising above, a chair 1 × 1, an emote 1 × 1,
+ * a message marker 1 × 1.
  */
 
 export type CharacterPose =
-  /** Seated, hands on the keyboard; two frames. */
+  /** Seated, hands on the keyboard. */
   | "type"
   /** Seated, still. */
   | "sit"
@@ -25,35 +41,40 @@ export type CharacterPose =
   | "sleep"
   /** On its feet, still. */
   | "stand"
-  /** Mid-step; two frames. */
+  /** Mid-step. */
   | "walk";
 
 export type ScreenState = "on" | "off" | "error";
 
 export interface SpriteProps {
   theme: PluginTheme;
-  /** Pixels per tile. */
+  /** Pixels per tile; a whole multiple of the 16 px art tile. */
   tile: number;
 }
 
-function slot(theme: PluginTheme, name: Slot): string {
-  const [red, green, blue, alpha] = paletteColor(officePalette(theme), name);
-  return `rgba(${red},${green},${blue},${alpha / 255})`;
-}
+const artScale = (tile: number) => Math.max(1, Math.round(tile / ART_TILE));
 
-const ROLE_MARK: Record<SpriteRole, Slot | null> = {
-  overseer: "hat",
-  nexus: "headsetLight",
-  meow: "earInner",
-  agent: null,
-};
+function pose(wanted: CharacterPose, heading: Heading): { pose: ArtPose; facing: Facing } {
+  switch (wanted) {
+    case "type":
+      return { pose: "sit", facing: "up" };
+    case "sit":
+      return { pose: "sit", facing: heading === "up" ? "up" : "down" };
+    case "sleep":
+      return { pose: "sleep", facing: "up" };
+    case "stand":
+      return { pose: "idle", facing: heading };
+    case "walk":
+      return { pose: "walk", facing: heading };
+  }
+}
 
 export const CharacterSprite = memo(function CharacterSprite({
   theme,
   tile,
   agentId,
   role,
-  pose,
+  pose: wanted,
   heading,
   frame,
 }: SpriteProps & {
@@ -62,92 +83,24 @@ export const CharacterSprite = memo(function CharacterSprite({
   role: SpriteRole;
   pose: CharacterPose;
   heading: Heading;
-  /** 0 or 1; only `type` and `walk` have a second frame. */
+  /** A running counter; it wraps at the pose's own frame count. 0 is the still. */
   frame: number;
 }) {
-  const look = lookFor(agentId);
-  const unit = tile / 16;
-  const height = tile * CHARACTER_HEIGHT;
-  const seated = pose === "type" || pose === "sit" || pose === "sleep";
-  const bob = (pose === "type" || pose === "walk") && frame % 2 === 1 ? unit : 0;
-  const mark = ROLE_MARK[role];
-  const outline = slot(theme, "outline");
+  const scale = artScale(tile);
+  const bitmap = character({ role, look: lookFor(agentId), ...pose(wanted, heading), frame });
   return (
-    <View style={{ width: tile, height }}>
-      {/* head */}
-      <View
-        style={{
-          position: "absolute",
-          left: unit * 3,
-          top: (pose === "sleep" ? unit * 5 : unit * 1) + bob,
-          width: unit * 10,
-          height: unit * 9,
-          borderRadius: unit * 3,
-          borderWidth: unit,
-          borderColor: outline,
-          backgroundColor: slot(theme, `skin${look.skin}` as Slot),
-          overflow: "hidden",
-        }}
-      >
-        <View
-          style={{
-            height: heading === "up" ? unit * 7 : unit * 3,
-            backgroundColor: slot(theme, `hair${look.hair}` as Slot),
-          }}
-        />
-      </View>
-      {mark ? (
-        <View
-          style={{
-            position: "absolute",
-            left: unit * 4,
-            top: (pose === "sleep" ? unit * 4 : 0) + bob,
-            width: unit * 8,
-            height: unit * 2,
-            backgroundColor: slot(theme, mark),
-            borderWidth: unit / 2,
-            borderColor: outline,
-          }}
-        />
-      ) : null}
-      {/* body */}
-      <View
-        style={{
-          position: "absolute",
-          left: unit * 2,
-          top: unit * 10 + bob,
-          width: unit * 12,
-          height: seated ? unit * 9 : unit * 8,
-          borderRadius: unit * 2,
-          borderWidth: unit,
-          borderColor: outline,
-          backgroundColor: slot(theme, `shirt${look.shirt}` as Slot),
-        }}
+    <View style={{ width: tile, height: tile * CHARACTER_HEIGHT }}>
+      <Sprite
+        sprite={bitmap}
+        palette={officePalette(theme)}
+        scale={scale}
+        style={anchored(bitmap, scale, tile / 2, tile * CHARACTER_HEIGHT)}
       />
-      {seated ? null : (
-        <View
-          style={{
-            position: "absolute",
-            left: unit * 4,
-            top: unit * 18,
-            width: unit * 8,
-            height: unit * 6 - bob,
-            borderWidth: unit,
-            borderColor: outline,
-            backgroundColor: slot(theme, `pants${look.pants}` as Slot),
-          }}
-        />
-      )}
     </View>
   );
 });
 
-const EMOTE_SLOT: Record<Emote, Slot> = {
-  question: "emoteAlert",
-  alert: "emoteFail",
-  check: "emoteReady",
-  zzz: "emoteIdle",
-};
+const EMOTE: Record<Emote, EmoteId> = { question: "question", alert: "fail", check: "check", zzz: "zzz" };
 
 export const EmoteSprite = memo(function EmoteSprite({
   theme,
@@ -155,170 +108,104 @@ export const EmoteSprite = memo(function EmoteSprite({
   kind,
   frame,
 }: SpriteProps & { kind: Emote; frame: number }) {
-  const unit = tile / 16;
+  const scale = artScale(tile);
+  const bitmap = emote(EMOTE[kind], frame);
   return (
-    <View style={{ width: tile, height: tile, alignItems: "center", justifyContent: "center" }}>
-      <View
-        style={{
-          width: unit * 10,
-          height: unit * 10,
-          borderRadius: kind === "zzz" ? unit * 2 : unit * 5,
-          marginTop: frame % 2 === 1 ? -unit * 2 : 0,
-          borderWidth: unit,
-          borderColor: slot(theme, "outline"),
-          backgroundColor: slot(theme, EMOTE_SLOT[kind]),
-        }}
-      />
+    <View style={{ width: tile, height: tile }}>
+      <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} style={anchored(bitmap, scale, tile / 2, tile)} />
     </View>
   );
 });
 
-const SCREEN_SLOT: Record<ScreenState, Slot> = { on: "screenLit", off: "screenOff", error: "screenError" };
+const SCREEN = { on: "lit", off: "off", error: "error" } as const;
 
-/** A desk two tiles wide with its monitor; the scene centres it on the desk cell's top row. */
-export const DeskSprite = memo(function DeskSprite({ theme, tile, screen }: SpriteProps & { screen: ScreenState }) {
-  const unit = tile / 16;
+/** A desk two tiles wide; its monitor rises above the box. */
+export const DeskSprite = memo(function DeskSprite({
+  theme,
+  tile,
+  screen,
+  frame = 0,
+}: SpriteProps & { screen: ScreenState; frame?: number }) {
+  const scale = artScale(tile);
+  const bitmap = prop("desk", { screen: SCREEN[screen], frame });
   return (
     <View style={{ width: tile * 2, height: tile }}>
-      <View
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: unit * 6,
-          bottom: 0,
-          borderRadius: unit * 2,
-          borderWidth: unit,
-          borderColor: slot(theme, "outline"),
-          backgroundColor: slot(theme, "wood"),
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          left: unit * 9,
-          top: 0,
-          width: unit * 14,
-          height: unit * 10,
-          borderRadius: unit,
-          borderWidth: unit,
-          borderColor: slot(theme, "outline"),
-          backgroundColor: slot(theme, SCREEN_SLOT[screen]),
-        }}
-      />
+      <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} style={anchored(bitmap, scale, tile, tile)} />
     </View>
   );
 });
 
 export const ChairSprite = memo(function ChairSprite({ theme, tile }: SpriteProps) {
-  const unit = tile / 16;
+  const scale = artScale(tile);
+  const bitmap = prop("chair");
   return (
     <View style={{ width: tile, height: tile }}>
-      <View
-        style={{
-          position: "absolute",
-          left: unit * 2,
-          top: unit * 4,
-          width: unit * 12,
-          height: unit * 11,
-          borderRadius: unit * 3,
-          borderWidth: unit,
-          borderColor: slot(theme, "outline"),
-          backgroundColor: slot(theme, "fabric"),
-        }}
-      />
-    </View>
-  );
-});
-
-const LOUNGE_SLOT: Record<LoungeSpotKind, Slot> = { coffee: "coffee", sofa: "fabric", plant: "leaf", water: "glass" };
-
-export const LoungeSprite = memo(function LoungeSprite({ theme, tile, kind }: SpriteProps & { kind: LoungeSpotKind }) {
-  const unit = tile / 16;
-  return (
-    <View style={{ width: tile, height: tile }}>
-      <View
-        style={{
-          position: "absolute",
-          left: unit * 2,
-          top: unit * 2,
-          right: unit * 2,
-          bottom: unit,
-          borderRadius: kind === "plant" ? unit * 6 : unit * 2,
-          borderWidth: unit,
-          borderColor: slot(theme, "outline"),
-          backgroundColor: slot(theme, LOUNGE_SLOT[kind]),
-        }}
-      />
+      <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} style={anchored(bitmap, scale, tile / 2, tile)} />
     </View>
   );
 });
 
 /** The envelope that travels between two desks. */
 export const MarkerSprite = memo(function MarkerSprite({ theme, tile }: SpriteProps) {
-  const unit = tile / 16;
+  const scale = artScale(tile);
+  const bitmap = prop("envelope");
   return (
-    <View style={{ width: tile, height: tile, alignItems: "center", justifyContent: "center" }}>
-      <View
-        style={{
-          width: unit * 12,
-          height: unit * 8,
-          borderRadius: unit,
-          borderWidth: unit,
-          borderColor: slot(theme, "outline"),
-          backgroundColor: slot(theme, "white"),
-        }}
+    <View style={{ width: tile, height: tile }}>
+      <Sprite
+        sprite={bitmap}
+        palette={officePalette(theme)}
+        scale={scale}
+        style={anchored(bitmap, scale, tile / 2, tile / 2 + (bitmap.height * scale) / 2)}
       />
     </View>
   );
 });
 
 /**
- * A room's floor, walls and lounge strip, as one static layer. It must not cost
- * a node per tile: the stand-in is four Views, and the bound version is one
- * image per room (or a small repeating set) from the encoder.
+ * A room's floor, walls, lounge strip and lounge furniture, flattened into one
+ * image. The drawing depends on the room's shape and not on where it stands,
+ * so rooms of the same shape share it.
  */
+const roomBitmaps = new Map<string, Bitmap>();
+
+function roomBitmap(room: Room): Bitmap {
+  const headerBottom = room.header.y + room.header.height - room.y;
+  const loungeTop = room.lounge.y - room.y;
+  const spots = room.lounge.spots.map((spot) => `${spot.kind}@${spot.x - room.x},${spot.y - room.y}`).join(";");
+  const key = `room:${room.width}x${room.height}:h${headerBottom}:l${loungeTop}:${spots}`;
+  // The layout is rebuilt on every directory update; the drawing only when a room changes shape.
+  const known = roomBitmaps.get(key);
+  if (known) return known;
+  const layers: Layer[] = [];
+  for (let y = 0; y < room.height; y += 1) {
+    for (let x = 0; x < room.width; x += 1) {
+      const edge = x === 0 || x === room.width - 1 || y === room.height - 1 || y === 0;
+      const id = edge ? "wallCap" : y < headerBottom ? "wall" : y >= loungeTop ? "floorAlt" : "floor";
+      layers.push({ bitmap: tileBitmap(id), x: x * ART_TILE, y: y * ART_TILE });
+    }
+  }
+  for (const spot of room.lounge.spots) {
+    // Furniture stands on the bottom centre of its tile.
+    layers.push({
+      bitmap: prop(spot.kind),
+      x: (spot.x - room.x) * ART_TILE + ART_TILE / 2,
+      y: (spot.y - room.y + 1) * ART_TILE,
+    });
+  }
+  const bitmap = composite(key, room.width * ART_TILE, room.height * ART_TILE, layers);
+  if (roomBitmaps.size >= 64) roomBitmaps.delete(roomBitmaps.keys().next().value as string);
+  roomBitmaps.set(key, bitmap);
+  return bitmap;
+}
+
 export const RoomBackdrop = memo(function RoomBackdrop({ theme, tile, room }: SpriteProps & { room: Room }) {
-  const wall = Math.max(2, tile / 4);
+  const bitmap = roomBitmap(room);
   return (
-    <View
-      style={{
-        position: "absolute",
-        left: room.x * tile,
-        top: room.y * tile,
-        width: room.width * tile,
-        height: room.height * tile,
-        backgroundColor: slot(theme, "floor"),
-        borderWidth: wall,
-        borderColor: slot(theme, "wallShade"),
-        borderRadius: wall,
-        overflow: "hidden",
-      }}
-    >
-      <View
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: 0,
-          height: (room.header.y + room.header.height - room.y) * tile - wall,
-          backgroundColor: slot(theme, "wall"),
-          borderBottomWidth: Math.max(1, tile / 8),
-          borderBottomColor: slot(theme, "wallTrim"),
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: (room.lounge.y - room.y) * tile - wall,
-          bottom: 0,
-          backgroundColor: slot(theme, "floorAlt"),
-          borderTopWidth: Math.max(1, tile / 16),
-          borderTopColor: slot(theme, "floorSeam"),
-        }}
-      />
-    </View>
+    <Sprite
+      sprite={bitmap}
+      palette={officePalette(theme)}
+      scale={artScale(tile)}
+      style={{ position: "absolute", left: room.x * tile, top: room.y * tile }}
+    />
   );
 });

@@ -81,8 +81,13 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const scale = useMemo(() => sceneScale(size.scene), [size.scene]);
   const groups = useMemo(() => groupByWorkspace(roots, directory.workspaces), [roots, directory.workspaces]);
   const plan = useMemo(
-    () => layoutOffice(groups, { width: scale.widthTiles, ...(scope !== null ? { roomColumns: 1 } : {}) }),
-    [groups, scale.widthTiles, scope],
+    () =>
+      layoutOffice(groups, {
+        width: scale.widthTiles,
+        agents: directory.agents,
+        ...(scope !== null ? { roomColumns: 1 } : {}),
+      }),
+    [groups, scale.widthTiles, scope, directory.agents],
   );
   const nodes = useMemo(() => indexNodes(roots), [roots]);
   const presences = useMemo(
@@ -130,7 +135,16 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
         : "No agents";
   const noMatchLabel = query || filter !== "all" ? "No matching agents" : emptyLabel;
 
-  const selectedNode = selected ? nodes.get(selected) : undefined;
+  // A visitor has no node in this forest; it still has a detail.
+  const selectedNode = useMemo<CrewNode | undefined>(() => {
+    if (!selected) return undefined;
+    const seated = nodes.get(selected);
+    if (seated) return seated;
+    const visitor = office && plan.visitors.has(selected) ? directory.agents.get(selected) : undefined;
+    return visitor
+      ? { agent: visitor, state: crewState(visitor), depth: 0, children: [], descendants: 0 }
+      : undefined;
+  }, [selected, nodes, office, plan.visitors, directory.agents]);
   const sideDock = size.view >= SIDE_DOCK_MIN_WIDTH;
   // A workspace pane fills its dock; the global list is reading-width, like Paseo's list pages.
   const column = !inPanel ? { width: "100%" as const, maxWidth: 720, alignSelf: "center" as const } : null;
@@ -223,6 +237,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                 office={plan}
                 tile={scale.tile}
                 nodes={nodes}
+                agents={directory.agents}
                 presences={presences}
                 bubbles={feed.bubbles}
                 exchanges={feed.exchanges}

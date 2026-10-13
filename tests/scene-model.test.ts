@@ -56,7 +56,8 @@ describe("sceneScale", () => {
     expect(sceneScale(352)).toEqual({ scale: 2, tile: 32, widthTiles: 11 });
     expect(sceneScale(1152)).toEqual({ scale: 3, tile: 48, widthTiles: 24 });
     expect(sceneScale(1151)).toEqual({ scale: 2, tile: 32, widthTiles: 35 });
-    expect(sceneScale(300)).toEqual({ scale: 1, tile: 16, widthTiles: 18 });
+    expect(sceneScale(290)).toEqual({ scale: 2, tile: 32, widthTiles: 9 });
+    expect(sceneScale(255)).toEqual({ scale: 1, tile: 16, widthTiles: 15 });
     expect(sceneScale(0)).toEqual({ scale: 1, tile: 16, widthTiles: 0 });
   });
 
@@ -86,6 +87,7 @@ describe("spriteRole and characterLabel", () => {
     expect(characterLabel(meow, "working")).toBe("Fix login form, Meow, Working");
     expect(characterLabel(meow, "needs-input", "Run npm test")).toBe("Fix login form, Meow, Needs you, Run npm test");
     expect(characterLabel(agent({ id: "abcdefghij" }), "closed")).toBe("claude · abcdefg, Closed");
+    expect(characterLabel(meow, "idle", null, true)).toBe("Visitor, Fix login form, Meow, Idle");
   });
 });
 
@@ -175,6 +177,19 @@ describe("markerPath", () => {
       fromSeated: true,
       toSeated: false,
     });
+  });
+
+  it("uses a visitor's spot as an end", () => {
+    const boss = agent({ id: "boss", workspaceId: "ws-home" });
+    const lead = agent({ id: "lead", workspaceId: "ws-a", labels: { "paseo.parent-agent-id": "boss" } });
+    const visited = layoutOffice(groupByWorkspace(buildForest([boss, lead], "ws-a"), new Map()), {
+      width: 30,
+      roomColumns: 1,
+      agents: new Map([boss, lead].map((entry) => [entry.id, entry])),
+    });
+    const spot = visited.visitors.get("boss")?.at;
+    expect(markerPath({ from: "boss", to: "lead" }, visited)).toMatchObject({ from: spot, fromSeated: true });
+    expect(markerPath({ from: "lead", to: "boss" }, visited)).toMatchObject({ to: spot, toSeated: true });
   });
 
   it("draws nothing when neither end is here", () => {

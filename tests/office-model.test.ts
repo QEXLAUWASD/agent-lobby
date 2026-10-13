@@ -159,9 +159,9 @@ describe("layoutOffice", () => {
 
   it("keeps the column and the order of later teams when an earlier team wraps to a new row", () => {
     const base = [agent({ id: "root" }), agent({ id: "lead" }, "root"), agent({ id: "under-lead" }, "lead")];
-    // 20 tiles wide: five desks to a pod row.
+    // 20 tiles wide: six desks to a pod row.
     const before = office(base, 20);
-    const more = [...base, ...["c2", "c3", "c4", "c5"].map((id) => agent({ id }, "root"))];
+    const more = [...base, ...["c2", "c3", "c4", "c5", "c6"].map((id) => agent({ id }, "root"))];
     const after = office(more, 20);
     expect(after.desks.get("under-lead")?.cell.x).toBe(before.desks.get("under-lead")?.cell.x);
     expect(after.desks.get("under-lead")?.cell.y).toBe((before.desks.get("under-lead")?.cell.y ?? 0) + DESK_HEIGHT);
@@ -236,6 +236,65 @@ describe("layoutOffice", () => {
 
   it("is empty for no agents", () => {
     expect(layoutOffice([], { width: 40 })).toMatchObject({ rooms: [], height: 0, cramped: false });
+  });
+});
+
+describe("visitors", () => {
+  const overseer = agent({ id: "overseer", workspaceId: "ws-home", labels: { "ghostline/role": "overseer" } });
+  const nexus = agent({ id: "nexus", labels: { "paseo.parent-agent-id": "overseer" } });
+  const meow = agent({ id: "meow" }, "nexus");
+  const all = [overseer, nexus, meow];
+  const directory = new Map(all.map((entry) => [entry.id, entry]));
+  const panel = (extra: PaseoAgent[] = []) =>
+    layoutOffice(groupByWorkspace(buildForest([...all, ...extra], "ws-a"), new Map()), {
+      width: 30,
+      roomColumns: 1,
+      agents: new Map([...directory, ...extra.map((entry) => [entry.id, entry] as const)]),
+    });
+
+  it("stands a root's parent from another workspace in the lounge, without a desk", () => {
+    const layout = panel();
+    expect(layout.desks.has("overseer")).toBe(false);
+    const visitor = layout.visitors.get("overseer");
+    const lounge = layout.rooms[0]?.lounge;
+    expect(visitor).toMatchObject({ hostId: "nexus", workspaceId: "ws-a" });
+    expect(visitor && lounge && inside({ ...visitor.at, width: 1, height: 1 }, lounge)).toBe(true);
+    expect(layout.roomOf.get("overseer")).toBe("ws-a");
+  });
+
+  it("moves no seat, and is absent once the parent has a room of its own", () => {
+    const without = layoutOffice(groupByWorkspace(buildForest(all, "ws-a"), new Map()), { width: 30, roomColumns: 1 });
+    expect(without.visitors.size).toBe(0);
+    expect(cells(panel())).toEqual(cells(without));
+    const everywhere = layoutOffice(groupByWorkspace(buildForest(all, null), new Map()), { width: 30, agents: directory });
+    expect(everywhere.visitors.size).toBe(0);
+    expect(everywhere.desks.has("overseer")).toBe(true);
+  });
+
+  it("gives each visitor its own spot, oldest first, and one spot to a parent of two crews", () => {
+    const second = agent({ id: "second-overseer", workspaceId: "ws-home" });
+    const layout = panel([
+      second,
+      agent({ id: "crew-2" }, "second-overseer"),
+      agent({ id: "crew-3" }, "overseer"),
+    ]);
+    expect([...layout.visitors.keys()]).toEqual(["overseer", "second-overseer"]);
+    const [first, next] = [...layout.visitors.values()];
+    expect(first?.at).not.toEqual(next?.at);
+    expect((first?.at.x ?? 0) < (next?.at.x ?? 0)).toBe(true);
+  });
+
+  it("shows a visitor standing, with the emote of its state", () => {
+    const layout = panel();
+    const waiting = { ...overseer, pendingPermissions: [{ id: "p" }] } as PaseoAgent;
+    const map = presences(layout, new Map([...directory, ["overseer", waiting]]), crewState, 0);
+    expect(map.get("overseer")).toMatchObject({
+      activity: "visiting",
+      at: layout.visitors.get("overseer")?.at,
+      visible: true,
+      seated: false,
+      emote: "question",
+    });
   });
 });
 

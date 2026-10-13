@@ -31,7 +31,7 @@ const GAP = 1;
 const HEADER_HEIGHT = 2;
 const LOUNGE_HEIGHT = 3;
 /** The narrowest room that still holds one desk between its walls. */
-export const MIN_ROOM_WIDTH = DESK_WIDTH + 2 * (WALL + GAP);
+export const MIN_ROOM_WIDTH = DESK_WIDTH + 2 * WALL;
 /** On a wide surface rooms sit side by side, each about this wide. */
 export const ROOM_TARGET_WIDTH = 44;
 
@@ -89,14 +89,25 @@ export interface Room extends Rect {
   agentCount: number;
 }
 
+/** A crew's parent that has no desk in this office: it stands in the lounge of the room it parents into. */
+export interface Visitor {
+  agentId: string;
+  /** The root it is the parent of. */
+  hostId: string;
+  workspaceId: string;
+  at: Point;
+}
+
 export interface Office {
   width: number;
   height: number;
   rooms: Room[];
   /** agentId → its desk. Every agent in the forest has exactly one. */
   desks: ReadonlyMap<string, Desk>;
-  /** agentId → the room it sits in. */
+  /** agentId → the room it sits in, or visits. */
   roomOf: ReadonlyMap<string, string>;
+  /** agentId → where it stands. Visitors never take a desk, so they move nobody. */
+  visitors: ReadonlyMap<string, Visitor>;
   /**
    * The width the caller offered was narrower than `MIN_ROOM_WIDTH`; the office
    * is laid out at the minimum and a view has to scroll or scale.
@@ -109,6 +120,12 @@ export interface OfficeOptions {
   width: number;
   /** Rooms per row. Defaults to as many `ROOM_TARGET_WIDTH` rooms as fit; pass 1 for a single-room panel. */
   roomColumns?: number;
+  /**
+   * The whole directory. With it, the parent of a root that is not itself in
+   * the office (it runs in a workspace the office does not show) is placed as a
+   * visitor.
+   */
+  agents?: ReadonlyMap<string, PaseoAgent>;
 }
 
 const bySeniority = (a: PaseoAgent, b: PaseoAgent): number =>
@@ -233,12 +250,13 @@ function furnish(area: Rect): Lounge {
 }
 
 function layoutRoom(group: CrewGroup, origin: Point, width: number): Room {
-  const inner = width - 2 * (WALL + GAP);
+  // Desk cells stand against the side walls: a desk is narrower than its cell, which is margin enough.
+  const inner = width - 2 * WALL;
   const podColumns = Math.max(1, Math.min(MAX_POD_COLUMNS, Math.floor(inner / DESK_WIDTH)));
   const plans = [...group.roots]
     .sort((a, b) => bySeniority(a.agent, b.agent))
     .map((root) => planPod(root, podColumns));
-  const left = origin.x + WALL + GAP;
+  const left = origin.x + WALL;
   const top = origin.y + WALL + HEADER_HEIGHT;
   const pods: Pod[] = [];
   // Shelves: pods fill a row left to right in seniority order, then wrap.
@@ -327,7 +345,31 @@ export function layoutOffice(groups: readonly CrewGroup[], options: OfficeOption
       }
     }
   });
-  return { width, height: rooms.length > 0 ? y + rowHeight : 0, rooms, desks, roomOf, cramped };
+  const visitors = new Map<string, Visitor>();
+  ordered.forEach((group, index) => {
+    const room = rooms[index] as Room;
+    const guests: Array<{ agent: PaseoAgent; hostId: string }> = [];
+    for (const root of group.roots) {
+      const parentId = parentAgentId(root.agent);
+      const parent = parentId ? options.agents?.get(parentId) : undefined;
+      if (!parent || parent.archivedAt || desks.has(parent.id) || visitors.has(parent.id)) continue;
+      if (guests.some((guest) => guest.agent.id === parent.id)) continue;
+      guests.push({ agent: parent, hostId: root.agent.id });
+    }
+    guests.sort((a, b) => bySeniority(a.agent, b.agent));
+    const slots = Math.max(1, Math.floor((room.lounge.width - 2) / 2));
+    guests.forEach((guest, slot) => {
+      visitors.set(guest.agent.id, {
+        agentId: guest.agent.id,
+        hostId: guest.hostId,
+        workspaceId: room.workspaceId,
+        // Along the top row of the lounge, from the left, every other tile.
+        at: { x: room.lounge.x + 1 + (slot % slots) * 2, y: room.lounge.y },
+      });
+      roomOf.set(guest.agent.id, room.workspaceId);
+    });
+  });
+  return { width, height: rooms.length > 0 ? y + rowHeight : 0, rooms, desks, roomOf, visitors, cramped };
 }
 
 export type Activity =
@@ -344,7 +386,9 @@ export type Activity =
   /** Idle for a long while, asleep at the desk. */
   | "asleep"
   /** Closed: the desk is kept, nobody is at it. */
-  | "away";
+  | "away"
+  /** A parent from a workspace the office does not show, standing in the lounge. */
+  | "visiting";
 
 export type Emote = "question" | "alert" | "check" | "zzz";
 
@@ -429,6 +473,23 @@ export function presences(
     if (!agent) continue;
     const lounge = lounges.get(office.roomOf.get(agentId) ?? "") ?? null;
     out.set(agentId, presenceOf(agent, stateOf(agent), desk, lounge, now));
+  }
+  for (const [agentId, visitor] of office.visitors) {
+    const agent = agents.get(agentId);
+    if (!agent) continue;
+    const state = stateOf(agent);
+    out.set(agentId, {
+      agentId,
+      state,
+      activity: "visiting",
+      at: visitor.at,
+      facing: "down",
+      visible: true,
+      seated: false,
+      screenOn: false,
+      emote: state === "needs-input" ? "question" : state === "failed" ? "alert" : state === "ready" ? "check" : null,
+      range: null,
+    });
   }
   return out;
 }

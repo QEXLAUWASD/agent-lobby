@@ -1,5 +1,5 @@
 import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
-import { CrewView } from "./panel";
+import { CrewView } from "./crew-view";
 
 export function CrewPanel(props: PluginWorkspacePanelProps) {
   return <CrewView {...props} scope={props.workspaceId} />;

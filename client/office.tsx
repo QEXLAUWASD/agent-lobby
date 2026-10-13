@@ -36,7 +36,6 @@ import {
   CharacterSprite,
   DeskSprite,
   EmoteSprite,
-  LoungeSprite,
   MarkerSprite,
   RoomBackdrop,
   type CharacterPose,
@@ -85,6 +84,7 @@ const POSE: Record<Presence["activity"], CharacterPose> = {
   wandering: "stand",
   asleep: "sleep",
   away: "sit",
+  visiting: "stand",
 };
 
 interface CharacterProps {
@@ -92,7 +92,8 @@ interface CharacterProps {
   tile: number;
   agent: PaseoAgent;
   presence: Presence;
-  desk: Desk;
+  /** The row the character walks along: the one under its own desk. */
+  aisleY: number;
   saying: string | null;
   selected: boolean;
   dimmed: boolean;
@@ -109,7 +110,7 @@ const Character = memo(function Character({
   tile,
   agent,
   presence,
-  desk,
+  aisleY,
   saying,
   selected,
   dimmed,
@@ -121,7 +122,7 @@ const Character = memo(function Character({
   const last = useRef<{ at: Point; tile: number }>({ at, tile });
   const [walking, setWalking] = useState<Heading | null>(null);
   const wanders = activity === "wandering" && range !== null && !reduced;
-  const aisleY = desk.stand.y;
+  const visiting = activity === "visiting";
   // The presence object is rebuilt on every directory update; the walk must only restart when it really changed.
   const rangeRef = useRef(range);
   rangeRef.current = range;
@@ -212,7 +213,7 @@ const Character = memo(function Character({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={characterLabel(agent, presence.state, saying)}
+        accessibilityLabel={characterLabel(agent, presence.state, saying, visiting)}
         accessibilityState={{ selected }}
         hitSlop={{ left: slop, right: slop, top: slop + (height - tile), bottom: slop }}
         onPress={() => onPress(agent.id)}
@@ -228,8 +229,30 @@ const Character = memo(function Character({
           frame={frame}
         />
       </Pressable>
+      {visiting ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: tile,
+            alignSelf: "center",
+            paddingHorizontal: 3,
+            borderRadius: 3,
+            borderWidth: selected ? 1 : 0,
+            borderColor: theme.colors.accent,
+            backgroundColor: theme.colors.surface0,
+          }}
+        >
+          <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 8, lineHeight: 10 }}>
+            visitor
+          </Text>
+        </View>
+      ) : null}
       {presence.emote && walking === null ? (
-        <View pointerEvents="none" style={{ position: "absolute", left: 0, bottom: height }}>
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", left: presence.seated ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
+        >
           <EmoteSprite theme={theme} tile={tile} kind={presence.emote} frame={emoteFrame} />
         </View>
       ) : null}
@@ -280,11 +303,11 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
         opacity: dimmed ? DIMMED : vacant ? 0.6 : 1,
       }}
     >
-      <View pointerEvents="none" style={{ position: "absolute", left: tile / 2, top: 0 }}>
-        <DeskSprite theme={theme} tile={tile} screen={screen} />
-      </View>
       <View pointerEvents="none" style={{ position: "absolute", left: tile, top: tile }}>
         <ChairSprite theme={theme} tile={tile} />
+      </View>
+      <View pointerEvents="none" style={{ position: "absolute", left: tile / 2, top: 0 }}>
+        <DeskSprite theme={theme} tile={tile} screen={screen} />
       </View>
       {/* The state in the theme's own status colour, for a reader who does not know the sprites yet. */}
       <View
@@ -502,18 +525,23 @@ const RoomSign = memo(function RoomSign({
       accessibilityLabel={`${room.name}, ${summary(room.counts)}`}
       style={{
         position: "absolute",
-        left: room.header.x * tile,
+        left: room.header.x * tile + 2,
         top: room.header.y * tile,
-        width: room.header.width * tile,
-        height: room.header.height * tile,
-        paddingHorizontal: tile / 2,
+        maxWidth: room.header.width * tile - 4,
+        // The plate hangs on the upper row of the wall; monitors rise into the lower one.
+        height: Math.max(16, Math.min(tile, 22)),
+        paddingHorizontal: 6,
+        borderRadius: 4,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.surface0,
         flexDirection: "row",
         alignItems: "center",
         gap: 6,
       }}
     >
       {urgent ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: urgent }} /> : null}
-      <Text numberOfLines={1} style={{ flexShrink: 1, color: colors.foreground, fontSize: font.sm, fontWeight: "600" }}>
+      <Text numberOfLines={1} style={{ flexShrink: 1, color: colors.foreground, fontSize: font.xs, fontWeight: "600" }}>
         {room.name}
       </Text>
       <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: font.xs }}>
@@ -535,6 +563,8 @@ export interface OfficeSceneProps {
   /** Pixels per tile. */
   tile: number;
   nodes: ReadonlyMap<string, CrewNode>;
+  /** The whole directory, for visitors, who are not in `nodes`. */
+  agents: ReadonlyMap<string, PaseoAgent>;
   presences: ReadonlyMap<string, Presence>;
   bubbles: ReadonlyMap<string, Bubble>;
   exchanges: readonly Exchange[];
@@ -553,6 +583,7 @@ export function OfficeScene({
   office,
   tile,
   nodes,
+  agents,
   presences,
   bubbles,
   exchanges,
@@ -617,17 +648,6 @@ export function OfficeScene({
               mail={mail.get(room.workspaceId) ?? 0}
             />
           ))}
-          {office.rooms.flatMap((room) =>
-            room.lounge.spots.map((spot) => (
-              <View
-                key={`${room.workspaceId}:${spot.x}`}
-                pointerEvents="none"
-                style={{ position: "absolute", left: spot.x * tile, top: spot.y * tile }}
-              >
-                <LoungeSprite theme={theme} tile={tile} kind={spot.kind} />
-              </View>
-            )),
-          )}
           {seated.map((desk) => {
             const node = nodes.get(desk.agentId);
             if (!node) return null;
@@ -656,10 +676,30 @@ export function OfficeScene({
                 tile={tile}
                 agent={node.agent}
                 presence={presence}
-                desk={desk}
+                aisleY={desk.stand.y}
                 saying={bubbles.get(desk.agentId)?.text ?? null}
                 selected={selected === desk.agentId}
                 dimmed={dim(desk.agentId)}
+                still={reduced}
+                onPress={onSelect}
+              />
+            );
+          })}
+          {[...office.visitors.values()].map((visitor) => {
+            const agent = agents.get(visitor.agentId);
+            const presence = presences.get(visitor.agentId);
+            if (!agent || !presence) return null;
+            return (
+              <Character
+                key={visitor.agentId}
+                theme={theme}
+                tile={tile}
+                agent={agent}
+                presence={presence}
+                aisleY={visitor.at.y}
+                saying={bubbles.get(visitor.agentId)?.text ?? null}
+                selected={selected === visitor.agentId}
+                dimmed={dim(visitor.agentId)}
                 still={reduced}
                 onPress={onSelect}
               />

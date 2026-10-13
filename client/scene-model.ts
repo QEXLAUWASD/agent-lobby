@@ -25,14 +25,14 @@ export interface SceneScale {
 
 /**
  * The largest whole scale that still leaves a sensible room: 3× needs 24 tiles
- * across, 2× needs 11 (two desk columns between the walls), otherwise 1×. A
+ * across, 2× needs 8 (two desk columns between the walls), otherwise 1×. A
  * phone or an Explorer pane lands on 2×, where a character is 32 by 48.
  */
 export function sceneScale(widthPx: number): SceneScale {
   const width = Math.max(0, Math.floor(widthPx));
   for (const [scale, minTiles] of [
     [3, 24],
-    [2, 11],
+    [2, 8],
   ] as const) {
     const widthTiles = Math.floor(width / (TILE * scale));
     if (widthTiles >= minTiles) return { scale, tile: TILE * scale, widthTiles };
@@ -53,8 +53,13 @@ export function spriteRole(agent: PaseoAgent): SpriteRole {
 }
 
 /** What a screen reader hears for a character: what the pixels say. */
-export function characterLabel(agent: PaseoAgent, state: CrewState, saying?: string | null): string {
-  const parts = [displayTitle(agent), roleOf(agent), STATE_LABEL[state]];
+export function characterLabel(
+  agent: PaseoAgent,
+  state: CrewState,
+  saying?: string | null,
+  visiting = false,
+): string {
+  const parts = [visiting ? "Visitor" : null, displayTitle(agent), roleOf(agent), STATE_LABEL[state]];
   if (saying) parts.push(saying);
   return parts.filter(Boolean).join(", ");
 }
@@ -119,8 +124,8 @@ export interface MarkerPath {
 }
 
 /**
- * Where a message travels. Between two seated agents it goes desk to desk, also
- * across rooms. When the sender is unknown or sits in a room this office does
+ * Where a message travels. Between two agents in the office (seated, or
+ * visiting) it goes from one to the other, also across rooms. When the sender is unknown or sits in a room this office does
  * not show, it comes in through the door of the recipient's room (the middle of
  * its top wall); when only the sender is here, it leaves through the sender's
  * door. With neither end here there is nothing to draw.
@@ -130,8 +135,9 @@ export function markerPath(exchange: Pick<Exchange, "from" | "to">, office: Offi
     const room = office.rooms.find((entry) => entry.workspaceId === office.roomOf.get(agentId));
     return room ? { x: room.x + Math.floor(room.width / 2), y: room.y } : null;
   };
-  const to = office.desks.get(exchange.to)?.seat ?? null;
-  const from = exchange.from ? (office.desks.get(exchange.from)?.seat ?? null) : null;
+  const spot = (agentId: string) => office.desks.get(agentId)?.seat ?? office.visitors.get(agentId)?.at ?? null;
+  const to = spot(exchange.to);
+  const from = exchange.from ? spot(exchange.from) : null;
   if (from && to) return { from, to, fromSeated: true, toSeated: true };
   if (to) {
     const entry = door(exchange.to);
