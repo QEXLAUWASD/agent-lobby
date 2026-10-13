@@ -9,7 +9,16 @@ import {
   character,
 } from "../client/pixel/characters";
 import type { CharacterPose, CharacterRole, Facing } from "../client/pixel/characters";
-import { BUBBLE_HEIGHT, BUBBLE_MAX_CACHED, bubble, bubbleWidth, type BubbleTone } from "../client/pixel/bubble";
+import {
+  BUBBLE_HEIGHT,
+  BUBBLE_MAX_CACHED,
+  BUBBLE_MAX_WIDTH,
+  bubble,
+  bubbleScale,
+  bubbleSize,
+  bubbleWidth,
+  type BubbleTone,
+} from "../client/pixel/bubble";
 import { contrast, luminance, mix, parseColor } from "../client/pixel/color";
 import { EMOTE_FRAMES, EMOTE_SIZE, emote, type EmoteId } from "../client/pixel/emotes";
 import { ELLIPSIS, FALLBACK, FONT_HEIGHT, GLYPH_CHARS, ICON, glyph } from "../client/pixel/font";
@@ -20,7 +29,7 @@ import { adler32, crc32, deflate, encodeIndexedPng, pngDataUri, toBase64, upscal
 import { PROPS, PROP_USES, TILE, door, prop, tile, wallTop, wallTopAt } from "../client/pixel/props";
 import type { PropId, ScreenState, TileId } from "../client/pixel/props";
 import { crispScale, devicePixels, snap } from "../client/pixel/scale";
-import { fitText, foldText, textWidth } from "../client/pixel/text";
+import { fitText, foldText, textWidth, wrapText } from "../client/pixel/text";
 
 const LIGHT: PluginTheme = {
   colors: {
@@ -610,25 +619,100 @@ describe("font and text", () => {
   });
 });
 
+describe("wrapping", () => {
+  it("breaks at spaces and keeps every line inside the width", () => {
+    const text = "Xong rồi, đã sửa lỗi ở cổng thanh toán và chạy lại toàn bộ kiểm thử";
+    for (const width of [20, 40, 78, 120]) {
+      for (const maxLines of [1, 2, 3, 5]) {
+        const lines = wrapText(text, width, maxLines);
+        expect(lines.length).toBeGreaterThan(0);
+        expect(lines.length).toBeLessThanOrEqual(maxLines);
+        for (const line of lines) {
+          expect(textWidth(line), `${width}/${maxLines}: ${line}`).toBeLessThanOrEqual(width);
+          expect(line).toBe(line.trim());
+        }
+      }
+    }
+    expect(wrapText("one two three", textWidth("one two"), 3)).toEqual(["one two", "three"]);
+    expect(wrapText("one two three", 500, 3)).toEqual(["one two three"]);
+  });
+
+  it("ends the last line with an ellipsis only when text is left over", () => {
+    const width = textWidth("one two");
+    expect(wrapText("one two three four five", width, 2)).toEqual(["one two", `three${ELLIPSIS}`]);
+    expect(wrapText("one two three", width, 2)).toEqual(["one two", "three"]);
+    expect(wrapText("one two three", width, 1)).toEqual([`one t${ELLIPSIS}`]);
+    // Nothing is lost when the lines are enough: the words come back in order.
+    const text = "the quick brown fox jumps over the lazy dog";
+    expect(wrapText(text, 60, 20).join(" ")).toBe(text);
+  });
+
+  it("breaks a word longer than a line", () => {
+    const lines = wrapText("browser_take_screenshot_fullpage", 40, 3);
+    expect(lines).toHaveLength(3);
+    for (const line of lines) expect(textWidth(line)).toBeLessThanOrEqual(40);
+    expect(lines[2]!.endsWith(ELLIPSIS)).toBe(true);
+    expect(wrapText("abcdefghij", 500, 2)).toEqual(["abcdefghij"]);
+    expect(wrapText("WWWW", 5, 4)).toEqual(["W", "W", "W", "W"]);
+  });
+
+  it("returns nothing for nothing", () => {
+    expect(wrapText("", 50, 3)).toEqual([]);
+    expect(wrapText("   ", 50, 3)).toEqual([]);
+    expect(wrapText("word", 50, 0)).toEqual([]);
+  });
+});
+
 describe("bubbles", () => {
   const TONES: BubbleTone[] = ["say", "tool", "tell", "ask", "alert"];
   const row = (bitmap: Bitmap, y: number) => [...bitmap.pixels.slice(y * bitmap.width, (y + 1) * bitmap.width)];
 
-  it("is as wide as bubbleWidth says, one height, anchored at the tail", () => {
+  it("is the size bubbleSize says, anchored at the tail", () => {
     for (const tone of TONES) {
       for (const text of ["", "ok", "Bash", "Đang kiểm tra hiện trạng của toàn bộ hệ thống thanh toán"]) {
         for (const maxWidth of [undefined, 30, 60, 146]) {
-          const spec = { text, tone, maxWidth };
-          const drawn = bubble(spec);
-          expect(drawn.width).toBe(bubbleWidth(spec));
-          expect(drawn.width).toBeLessThanOrEqual(maxWidth ?? 120);
-          expect(drawn.height).toBe(BUBBLE_HEIGHT);
-          expect(drawn.anchor).toEqual({ x: Math.floor(drawn.width / 2), y: BUBBLE_HEIGHT });
-          // The tip of the tail is the only pixel on the last row.
-          expect(row(drawn, BUBBLE_HEIGHT - 1).filter(Boolean)).toHaveLength(1);
-          expect(row(drawn, BUBBLE_HEIGHT - 1)[drawn.anchor.x]).toBe(slotIndex("outline"));
+          for (const maxLines of [undefined, 1, 2]) {
+            const spec = { text, tone, maxWidth, maxLines };
+            const drawn = bubble(spec);
+            expect({ width: drawn.width, height: drawn.height }).toEqual(bubbleSize(spec));
+            expect(drawn.width).toBe(bubbleWidth(spec));
+            expect(drawn.width).toBeLessThanOrEqual(maxWidth ?? BUBBLE_MAX_WIDTH);
+            expect([14, 23, 32]).toContain(drawn.height);
+            expect(drawn.anchor).toEqual({ x: Math.floor(drawn.width / 2), y: drawn.height });
+            // The tip of the tail is the only pixel on the last row.
+            expect(row(drawn, drawn.height - 1).filter(Boolean)).toHaveLength(1);
+            expect(row(drawn, drawn.height - 1)[drawn.anchor.x]).toBe(slotIndex("outline"));
+          }
         }
       }
+    }
+    expect(BUBBLE_HEIGHT).toBe(14);
+  });
+
+  it("grows a line at a time, up to the lines allowed", () => {
+    const text = "Xong rồi, đã sửa lỗi ở cổng thanh toán và chạy lại toàn bộ kiểm thử";
+    expect(bubbleSize({ text: "ok", tone: "say" }).height).toBe(14);
+    expect(bubbleSize({ text, tone: "say", maxLines: 1 }).height).toBe(14);
+    expect(bubbleSize({ text, tone: "say", maxLines: 2 }).height).toBe(23);
+    expect(bubbleSize({ text, tone: "say" }).height).toBe(32);
+    expect(bubbleSize({ text, tone: "say", maxLines: 9, maxWidth: 200 }).height).toBeLessThan(32);
+    // A tool bubble is one short line whatever is asked.
+    expect(bubbleSize({ text, tone: "tool", maxLines: 3 }).height).toBe(14);
+    // Two lines hold more of the text than one.
+    expect(bubble({ text, tone: "say", maxLines: 2 }).pixels.filter((value) => value === slotIndex("outline")).length).toBeGreaterThan(
+      bubble({ text, tone: "say", maxLines: 1 }).pixels.filter((value) => value === slotIndex("outline")).length,
+    );
+  });
+
+  it("draws at a readable crisp scale whatever the room's", () => {
+    expect(bubbleScale(2)).toBe(1.5);
+    expect(bubbleScale(1)).toBe(2);
+    expect(bubbleScale(5 / 3)).toBeCloseTo(1.8);
+    expect(bubbleScale(3)).toBeCloseTo(5 / 3);
+    for (const ratio of [1, 1.25, 1.5, 5 / 3, 2, 2.625, 3]) {
+      const scale = bubbleScale(ratio);
+      expect(scale * 7, `capital height at ${ratio}`).toBeGreaterThanOrEqual(9.8);
+      expect(scale).toBeLessThanOrEqual(2.4);
     }
   });
 
@@ -662,6 +746,7 @@ describe("bubbles", () => {
     expect(plain).toBe(bubble({ text: "Loi", tone: "say" }));
     expect(plain.pixels).not.toEqual(bubble({ text: "Lol", tone: "say" }).pixels);
     expect(bubble({ text: "", tone: "say" }).width).toBe(9);
+    expect(bubble({ text: "a b", tone: "say", maxWidth: 9 + 5 })).not.toBe(bubble({ text: "a b", tone: "say" }));
   });
 
   it("keeps a bounded number of drawings", () => {

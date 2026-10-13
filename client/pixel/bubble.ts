@@ -2,7 +2,8 @@ import { FONT_HEIGHT, ICON, glyph } from "./font";
 import { canvas, type Bitmap, type Canvas } from "./grid";
 import { Lru } from "./lru";
 import { slotIndex, type Slot } from "./palette";
-import { fitText, stampText, textWidth } from "./text";
+import { crispScale } from "./scale";
+import { stampText, textWidth, wrapText } from "./text";
 
 /**
  * Speech bubbles with the words drawn in: one bitmap, one image, whatever the text. The tail
@@ -20,20 +21,34 @@ export interface BubbleSpec {
   readonly status?: BubbleStatus;
   /** Widest the whole bubble may be, in art pixels. */
   readonly maxWidth?: number;
+  /** Most lines the text may wrap to. A `tool` bubble is always one line. */
+  readonly maxLines?: number;
   /** Where the tail's tip sits, in art pixels from the left edge. Defaults to the centre. */
   readonly tailX?: number;
 }
 
-export const BUBBLE_MAX_WIDTH = 120;
-const PAD_X = 3;
-const PAD_TOP = 2;
-const ICON_GAP = 3;
+export const BUBBLE_MAX_WIDTH = 88;
+export const BUBBLE_MAX_LINES = 3;
+const PAD_X = 2;
+const PAD_TOP = 1;
+const ICON_GAP = 2;
 const TAIL_HEIGHT = 2;
-/** Border, padding, capitals, descenders, border. */
-const BODY_HEIGHT = 1 + PAD_TOP + FONT_HEIGHT + 1;
-export const BUBBLE_HEIGHT = BODY_HEIGHT + TAIL_HEIGHT;
+/** Lines sit directly under one another: a descender may touch the next line's capitals. */
+const LINE_HEIGHT = FONT_HEIGHT;
+/** Border, padding, the lines, border, tail. */
+const heightOf = (lines: number) => 1 + PAD_TOP + lines * LINE_HEIGHT + 1 + TAIL_HEIGHT;
+/** The height of a one-line bubble. Bubbles with more lines are taller: see `bubbleSize`. */
+export const BUBBLE_HEIGHT = heightOf(1);
 /** The tail keeps this far from either end, clear of the corners. */
 const TAIL_MARGIN = 4;
+
+/**
+ * Bubbles are drawn at their own scale, whatever the room's, so the words stay readable when the
+ * room is small: the smallest crisp scale that makes a capital about ten layout pixels tall.
+ */
+export function bubbleScale(pixelRatio: number): number {
+  return crispScale(1.4, pixelRatio, "up");
+}
 
 interface Style {
   readonly fill: Slot;
@@ -66,8 +81,9 @@ function styleOf(tone: BubbleTone, status: BubbleStatus | undefined): Style {
 
 interface Plan {
   readonly style: Style;
-  readonly text: string;
+  readonly lines: readonly string[];
   readonly width: number;
+  readonly height: number;
   readonly tailX: number;
 }
 
@@ -77,13 +93,15 @@ function plan(spec: BubbleSpec): Plan {
   const chrome = 2 + 2 * PAD_X + iconWidth;
   const minWidth = 2 * TAIL_MARGIN + 1;
   const maxWidth = Math.max(minWidth, Math.floor(spec.maxWidth ?? BUBBLE_MAX_WIDTH));
-  const text = fitText(spec.text, Math.max(0, maxWidth - chrome));
+  const maxLines = spec.tone === "tool" ? 1 : Math.max(1, Math.floor(spec.maxLines ?? BUBBLE_MAX_LINES));
+  const lines = wrapText(spec.text, Math.max(0, maxWidth - chrome), maxLines);
+  const widest = Math.max(0, ...lines.map(textWidth));
   // With no words left, the icon does not need the gap after it.
-  const content = textWidth(text) === 0 && iconWidth > 0 ? iconWidth - ICON_GAP : iconWidth + textWidth(text);
+  const content = widest === 0 && iconWidth > 0 ? iconWidth - ICON_GAP : iconWidth + widest;
   const width = Math.min(maxWidth, Math.max(minWidth, 2 + 2 * PAD_X + content));
   const wanted = spec.tailX === undefined ? Math.floor(width / 2) : Math.round(spec.tailX);
   const tailX = Math.min(width - 1 - TAIL_MARGIN, Math.max(TAIL_MARGIN, wanted));
-  return { style, text, width, tailX };
+  return { style, lines, width, height: heightOf(Math.max(1, lines.length)), tailX };
 }
 
 /** How wide `bubble(spec)` will be, in art pixels, without drawing it. */
@@ -91,15 +109,21 @@ export function bubbleWidth(spec: BubbleSpec): number {
   return plan(spec).width;
 }
 
-function draw({ style, text, width, tailX }: Plan): Canvas {
-  const out = canvas(width, BUBBLE_HEIGHT);
+/** The size `bubble(spec)` will have, in art pixels, tail included, without drawing it. */
+export function bubbleSize(spec: BubbleSpec): { width: number; height: number } {
+  const { width, height } = plan(spec);
+  return { width, height };
+}
+
+function draw({ style, lines, width, height, tailX }: Plan): Canvas {
+  const out = canvas(width, height);
   const outline = slotIndex("outline");
   const fill = slotIndex(style.fill);
   const ink = slotIndex(style.ink);
   const set = (x: number, y: number, value: number) => {
     out.pixels[y * width + x] = value;
   };
-  const bottom = BODY_HEIGHT - 1;
+  const bottom = height - TAIL_HEIGHT - 1;
   for (let y = 0; y <= bottom; y++) {
     for (let x = 0; x < width; x++) {
       const edge = x === 0 || y === 0 || x === width - 1 || y === bottom;
@@ -136,7 +160,7 @@ function draw({ style, text, width, tailX }: Plan): Canvas {
     stampText(out.pixels, width, style.icon, x, top, ink);
     x += glyph(style.icon).width + ICON_GAP;
   }
-  stampText(out.pixels, width, text, x, top, ink);
+  lines.forEach((line, index) => stampText(out.pixels, width, line, x, top + index * LINE_HEIGHT, ink));
   return out;
 }
 
@@ -146,10 +170,10 @@ const cache = new Lru<Bitmap>(BUBBLE_MAX_CACHED);
 /** The bubble for `spec`. Its anchor is the tip of the tail. */
 export function bubble(spec: BubbleSpec): Bitmap {
   const planned = plan(spec);
-  const key = `b:${spec.tone}:${spec.status ?? ""}:${planned.width}:${planned.tailX}:${planned.text}`;
+  const key = `b:${spec.tone}:${spec.status ?? ""}:${planned.width}:${planned.tailX}:${planned.lines.join("\n")}`;
   let bitmap = cache.get(key);
   if (!bitmap) {
-    bitmap = { key, anchor: { x: planned.tailX, y: BUBBLE_HEIGHT }, ...draw(planned) };
+    bitmap = { key, anchor: { x: planned.tailX, y: planned.height }, ...draw(planned) };
     cache.set(key, bitmap);
   }
   return bitmap;

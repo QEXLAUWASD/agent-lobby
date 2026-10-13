@@ -46,7 +46,7 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | screenV | 4 × 22 | bottom centre | 1 |
 | every `tile(id)` and `wallTop(joins)` | 16 × 16 | 0, 0 | 1 |
 | door(faceRows) | 16 × 16·faceRows | 0, 0 | 1 |
-| bubble | text width + chrome (9 to `maxWidth`, default 120) × 15 | `tailX`, 15 (tip of the tail) | 1 |
+| bubble | 9 to `maxWidth` (default 88) × 14, 23 or 32 | `tailX`, height (tip of the tail) | 1 |
 
 Put a character's anchor on the bottom centre of the tile it stands or sits on. A seated character
 facing up carries the chair's back in its own drawing, so the order chair, desk, character is right
@@ -110,10 +110,18 @@ raise a sitter so it rests on the seat. A sitter shares the prop's tile and is d
 
 ## Speech bubbles and the font
 
-`bubble({ text, tone, status?, maxWidth?, tailX? })` returns one bitmap with the words drawn in, so
-a bubble of any length is one image. `bubbleWidth(spec)` gives its width without drawing, for
-placing it; pass the speaker's offset back as `tailX` and the tail keeps pointing at them when the
-bubble is pushed in from an edge. One line only.
+`bubble({ text, tone, status?, maxWidth?, maxLines?, tailX? })` returns one bitmap with the words
+drawn in, so a bubble of any length is one image. The text wraps at spaces to at most `maxLines`
+(default 3; a `tool` bubble is always one line) inside `maxWidth` (default 88 art pixels), and ends
+with an ellipsis if it still does not fit. `bubbleSize(spec)` gives the width and height without
+drawing: 14, 23 or 32 art pixels tall for one, two or three lines, tail included. Pass the
+speaker's offset back as `tailX` and the tail keeps pointing at them when the bubble is pushed in
+from an edge.
+
+Bubbles are drawn at their own scale, not the room's: `bubbleScale(pixelRatio)` is the smallest
+crisp scale at or above 1.4, which is 1.5 on a 2× screen, 2 on a 1× screen and 1.8 on a 1.67× one.
+A capital is then 10 to 14 layout pixels tall while the room can be as small as 1×. A smaller face
+was not drawn: 3 × 5 or 4 × 6 at the room's 1× would be 5 or 6 layout pixels tall.
 
 | Tone | Shape | Icon | Fill |
 | --- | --- | --- | --- |
@@ -124,14 +132,14 @@ bubble is pushed in from an edge. One line only.
 | alert | rounded | ! | danger |
 
 The font is 5 × 7 with two rows of descender and proportional widths: ASCII letters, digits and
-punctuation, an ellipsis, four icons and a fallback block. At scale 2 a capital is 14 layout pixels
-tall; a 3 × 5 face would be 10 and was judged too small for a phone-width pane. 120 art pixels hold
-about 20 characters.
+punctuation, an ellipsis, four icons and a fallback block. 88 art pixels hold about 14 characters
+a line.
 
 `foldText` rewrites text into what the font has: accented Latin letters, Vietnamese included,
 become their base letter (đ → d), whitespace runs become one space, and a run of anything else
-(emoji, CJK) becomes a single fallback block. `textWidth` measures in art pixels and
-`fitText(text, maxWidth)` cuts with an ellipsis. `bubble` does both itself.
+(emoji, CJK) becomes a single fallback block. `textWidth` measures in art pixels,
+`fitText(text, maxWidth)` cuts to one line with an ellipsis and `wrapText(text, maxWidth, maxLines)`
+wraps. `bubble` does all of it itself.
 
 ## Caches
 

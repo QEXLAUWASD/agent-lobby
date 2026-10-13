@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Image, PixelRatio, type ImageStyle, type StyleProp } from "react-native";
+import { bubbleScale } from "./bubble";
 import type { Bitmap } from "./grid";
 import { Lru } from "./lru";
 import type { Palette } from "./palette";
@@ -38,6 +39,7 @@ export function devicePixelScale(scale: number): number {
 export const deviceCrispScale = (target: number, round?: "down" | "up" | "nearest") =>
   crispScale(target, PixelRatio.get(), round);
 export const deviceSnap = (value: number) => snap(value, PixelRatio.get());
+export const deviceBubbleScale = () => bubbleScale(PixelRatio.get());
 
 export interface SpriteProps {
   sprite: Bitmap;

@@ -77,17 +77,57 @@ export function textWidth(text: string): number {
   return measure(foldText(text));
 }
 
-/** `text` folded and, when it is wider than `maxWidth`, cut short with an ellipsis. */
-export function fitText(text: string, maxWidth: number): string {
-  const folded = foldText(text);
+/** Already-folded text, cut short with an ellipsis when it is wider than `maxWidth`. */
+function cut(folded: string, maxWidth: number): string {
   if (measure(folded) <= maxWidth) return folded;
   const chars = Array.from(folded);
   while (chars.length > 0) {
     chars.pop();
-    const cut = `${chars.join("").trimEnd()}${ELLIPSIS}`;
-    if (measure(cut) <= maxWidth) return cut;
+    const shorter = `${chars.join("").trimEnd()}${ELLIPSIS}`;
+    if (measure(shorter) <= maxWidth) return shorter;
   }
   return measure(ELLIPSIS) <= maxWidth ? ELLIPSIS : "";
+}
+
+/** `text` folded and, when it is wider than `maxWidth`, cut short with an ellipsis. */
+export function fitText(text: string, maxWidth: number): string {
+  return cut(foldText(text), maxWidth);
+}
+
+/** The longest run of characters from the start of `word` that fits; at least one. */
+function head(word: string, maxWidth: number): string {
+  const chars = Array.from(word);
+  let count = 1;
+  while (count < chars.length && measure(chars.slice(0, count + 1).join("")) <= maxWidth) count++;
+  return chars.slice(0, count).join("");
+}
+
+/**
+ * `text` folded and wrapped at spaces into at most `maxLines` lines no wider than `maxWidth`. A
+ * word too long for a line is broken; whatever does not fit ends the last line with an ellipsis.
+ */
+export function wrapText(text: string, maxWidth: number, maxLines = 1): string[] {
+  const words = foldText(text).split(" ").filter(Boolean);
+  const lines: string[] = [];
+  let next = 0;
+  while (next < words.length && lines.length < maxLines) {
+    if (lines.length === maxLines - 1) {
+      lines.push(cut(words.slice(next).join(" "), maxWidth));
+      break;
+    }
+    const word = words[next]!;
+    if (measure(word) > maxWidth) {
+      const piece = head(word, maxWidth);
+      lines.push(piece);
+      words[next] = word.slice(piece.length);
+      continue;
+    }
+    let line = word;
+    next++;
+    while (next < words.length && measure(`${line} ${words[next]}`) <= maxWidth) line += ` ${words[next++]}`;
+    lines.push(line);
+  }
+  return lines.filter((line) => line !== "");
 }
 
 /**
