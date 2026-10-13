@@ -23,6 +23,8 @@ import {
   tile as tileBitmap,
   PROPS,
   TILE as ART_TILE,
+  CHARACTER_FRAMES,
+  EMOTE_FRAMES,
   type CharacterPose as ArtPose,
   type EmoteId,
   type Bitmap,
@@ -147,6 +149,11 @@ export const CharacterSprite = memo(function CharacterSprite({
 });
 
 const EMOTE: Record<Emote, EmoteId> = { question: "question", alert: "fail", check: "check", zzz: "zzz" };
+
+/** How many frames each loop has, for whoever runs it. */
+export const WALK_FRAMES = CHARACTER_FRAMES.walk;
+export const TYPE_FRAMES = CHARACTER_FRAMES.sit;
+export const emoteFrames = (kind: Emote): number => EMOTE_FRAMES[EMOTE[kind]];
 
 export const EmoteSprite = memo(function EmoteSprite({
   theme,

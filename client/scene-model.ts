@@ -279,6 +279,14 @@ export function actFrame(act: Act, beat: number, seed: number): 0 | 1 {
   }
 }
 
+/** How many beats it takes each activity to come back to where it began, whatever the seed. */
+const ACT_BEATS: Record<Act, number> = { drink: 10, stretch: 14, talk: 4, doze: 8, read: 1 };
+
+/** One loop of an activity, a frame per beat: `actFrame` written out, for whoever animates it without a timer. */
+export function actCycle(act: Act, seed: number): (0 | 1)[] {
+  return Array.from({ length: ACT_BEATS[act] }, (_, beat) => actFrame(act, beat, seed));
+}
+
 /** The spot an activity is done at. */
 export function spotOf(activity: Presence["activity"]): Spot {
   return SPOT[activity];
@@ -292,8 +300,7 @@ export interface Track {
 /**
  * How a bubble follows a walking character without leaving the office: its
  * left edge as a function of the character's x, and its top as a function of
- * the character's y, each a slope-one line clamped at the office's edges. The
- * scene feeds these to `Animated.interpolate`, so following costs no render.
+ * the character's y, each a slope-one line clamped at the office's edges.
  */
 export function bubbleTrack(
   bubbleWidth: number,
@@ -312,6 +319,27 @@ export function bubbleTrack(
     x: { inputRange: [min - shift, Math.max(min, max) - shift + (max <= min ? 1 : 0)], outputRange: [min, Math.max(min, max) + (max <= min ? 1 : 0)], fixed: max <= min ? min : null },
     // top = y - lift, never above the office.
     y: { inputRange: [lift, lift + 1], outputRange: [0, 1] },
+  };
+}
+
+/**
+ * The same track for a follower that is moved piece by piece: where the bubble
+ * is for a speaker at `at` (both in pixels), and the speaker positions at which
+ * that line bends.
+ */
+export function bubbleFollow(track: ReturnType<typeof bubbleTrack>): {
+  place: (at: Point) => Point;
+  knotsX: number[];
+  knotsY: number[];
+} {
+  const { x, y } = track;
+  return {
+    place: (at) => ({
+      x: x.fixed ?? Math.min(x.outputRange[1], Math.max(x.outputRange[0], at.x - x.inputRange[0] + x.outputRange[0])),
+      y: Math.max(y.outputRange[0], at.y - y.inputRange[0] + y.outputRange[0]),
+    }),
+    knotsX: x.fixed === null ? [...x.inputRange] : [],
+    knotsY: [y.inputRange[0]],
   };
 }
 

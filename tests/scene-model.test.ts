@@ -5,8 +5,10 @@ import { layoutOffice } from "../client/office-model";
 import {
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
+  actCycle,
   actFrame,
   bubbleClearance,
+  bubbleFollow,
   bubbleTrack,
   characterLabel,
   highlighted,
@@ -377,5 +379,55 @@ describe("roomsInView and indexNodes", () => {
     const roots = buildForest([agent({ id: "r" }), agent({ id: "c" }, "r"), agent({ id: "g" }, "c")], null);
     expect([...indexNodes(roots).keys()].sort()).toEqual(["c", "g", "r"]);
     expect(indexNodes(roots).get("g")?.depth).toBe(2);
+  });
+});
+
+describe("bubbleFollow", () => {
+  // What the track means, read as an interpolation: slope one between the ends, held outside them.
+  const along = (track: { inputRange: [number, number]; outputRange: [number, number] }, value: number, extend: boolean) => {
+    const [a, b] = track.inputRange;
+    const [c] = track.outputRange;
+    const held = extend ? Math.max(a, value) : Math.min(b, Math.max(a, value));
+    return c + (held - a);
+  };
+
+  it("puts the bubble where the track does, for a speaker anywhere", () => {
+    const track = bubbleTrack(100, 20, 32, 640, 8);
+    const follow = bubbleFollow(track);
+    for (const x of [-50, 0, 31, 36, 200, 571, 572, 700]) {
+      for (const y of [0, 30, 43, 44, 300]) {
+        expect(follow.place({ x, y })).toEqual({ x: along(track.x, x, false), y: along(track.y, y, true) });
+      }
+    }
+  });
+
+  it("bends where the bubble meets an edge of the office, and nowhere else", () => {
+    const track = bubbleTrack(100, 20, 32, 640, 8);
+    const follow = bubbleFollow(track);
+    expect(follow.knotsX).toEqual(track.x.inputRange);
+    expect(follow.knotsY).toEqual([track.y.inputRange[0]]);
+    // Just inside the left knot it moves with the speaker; just outside it is held.
+    const [knot] = follow.knotsX;
+    expect(follow.place({ x: knot! + 5, y: 300 }).x - follow.place({ x: knot!, y: 300 }).x).toBe(5);
+    expect(follow.place({ x: knot! - 5, y: 300 }).x).toBe(follow.place({ x: knot!, y: 300 }).x);
+  });
+
+  it("stays put sideways, with no bend, when the bubble is as wide as the office", () => {
+    const follow = bubbleFollow(bubbleTrack(700, 20, 32, 640));
+    expect(follow.knotsX).toEqual([]);
+    expect(follow.place({ x: 0, y: 300 }).x).toBe(follow.place({ x: 500, y: 300 }).x);
+  });
+});
+
+describe("actCycle", () => {
+  it("is one whole loop of actFrame: the beats after it repeat it", () => {
+    for (const act of ["drink", "stretch", "talk", "doze", "read"] as const) {
+      for (const seed of [0, 1, 4, 9]) {
+        const cycle = actCycle(act, seed);
+        for (let beat = 0; beat < 4 * cycle.length; beat += 1) {
+          expect(actFrame(act, beat, seed)).toBe(cycle[beat % cycle.length]);
+        }
+      }
+    }
   });
 });

@@ -1,10 +1,8 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import type { PaseoAgent } from "@getpaseo/client";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Animated,
-  Easing,
   Pressable,
   Text,
   View,
@@ -14,13 +12,16 @@ import {
 } from "react-native";
 import type { Bubble, Exchange } from "./exchanges";
 import { STATE_LABEL, type CrewNode } from "./model";
+import { FadeIn, Frames, Mover, afterPaint, createMotion, useFollow, useMotion, type Motion, type Move } from "./motion";
+import { glideAt, restingAt, type Cycle } from "./motion-model";
 import { DESK_WIDTH, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
 import {
   CHARACTER_HEIGHT,
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
-  actFrame,
+  actCycle,
   bubbleClearance,
+  bubbleFollow,
   bubbleTrack,
   characterLabel,
   linkBetween,
@@ -48,14 +49,18 @@ import {
   EmoteSprite,
   MarkerSprite,
   RoomBackdrop,
+  TYPE_FRAMES,
+  WALK_FRAMES,
   bubbleSize,
+  emoteFrames,
   snapToDevice,
   type CharacterPose,
 } from "./sprites";
 import { font, stateColor } from "./ui";
 
-/** One tick is a walking step; typing and emotes change every other tick. */
-const TICK_MS = 140;
+/** A walking step; typing, emotes and activities change every other one. */
+const STEP_MS = 140;
+const BEAT_MS = 2 * STEP_MS;
 const DIMMED = 0.28;
 /**
  * Characters are stacked by the row they stand on. Messages and speech are not
@@ -63,39 +68,10 @@ const DIMMED = 0.28;
  */
 const ABOVE_ROOM = 100_000;
 
-/** One interval for every animated sprite in the scene; it runs only while somebody is listening. */
-const ticker = (() => {
-  let tick = 0;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  const fast = new Set<() => void>();
-  const slow = new Set<() => void>();
-  const listen = (listeners: Set<() => void>) => (listener: () => void) => {
-    listeners.add(listener);
-    timer ??= setInterval(() => {
-      tick = (tick + 1) % 4096;
-      for (const notify of fast) notify();
-      if (tick % 2 === 0) for (const notify of slow) notify();
-    }, TICK_MS);
-    return () => {
-      listeners.delete(listener);
-      if (fast.size + slow.size === 0 && timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
-  };
-  return { fast: listen(fast), slow: listen(slow), step: () => tick, beat: () => tick >> 1 };
-})();
-const still = () => () => {};
-const zero = () => 0;
-
-/** A frame counter from the shared timer: every tick for a walk, every other tick otherwise, 0 when off. */
-function useFrame(pace: "walk" | "slow" | "off"): number {
-  return useSyncExternalStore(
-    pace === "walk" ? ticker.fast : pace === "slow" ? ticker.slow : still,
-    pace === "walk" ? ticker.step : pace === "slow" ? ticker.beat : zero,
-  );
-}
+const loop = (count: number, beatMs: number): Cycle => ({ frames: Array.from({ length: count }, (_, frame) => frame), beatMs });
+const STILL: Cycle = loop(1, BEAT_MS);
+const WALK: Cycle = loop(WALK_FRAMES, STEP_MS);
+const TYPE: Cycle = loop(TYPE_FRAMES, BEAT_MS);
 
 const POSE: Record<Presence["activity"], CharacterPose> = {
   typing: "type",
@@ -138,7 +114,7 @@ interface CharacterProps {
   /** It is no longer in the office: it walks out and reports back. */
   leaving: boolean;
   /** The character's position in pixels, shared with whatever follows it. */
-  position: Animated.ValueXY;
+  motion: Motion;
   visiting: boolean;
   saying: string | null;
   selected: boolean;
@@ -154,9 +130,9 @@ interface CharacterProps {
  * A character belongs at a spot: its chair, beside it, the lounge, or out of
  * the room. When its spot changes it walks there along the aisle and the
  * corridor; when the same spot is somewhere else the room moved, and it is
- * placed. Under reduced motion it is always placed. Positions run on the
- * animation driver, and the walk cycle on the scene's one timer, so a walking
- * character costs a render per step, not per frame.
+ * placed. Under reduced motion it is always placed. A leg of a walk is handed
+ * to the platform whole, and so is each loop of frames, so a walking character
+ * costs a render per leg and one that types costs none.
  */
 const Character = memo(
   function Character({
@@ -171,7 +147,7 @@ const Character = memo(
     corridorX,
     enter,
     leaving,
-    position,
+    motion,
     visiting,
     saying,
     selected,
@@ -205,11 +181,11 @@ const Character = memo(
 
     useEffect(() => {
       const here = latest.current.places;
-      const place = here[spot];
+      const to = here[spot];
       const next: Standing = {
         spot,
         key: spot === "lounge" ? breakKey : spot === "out" ? "out" : seatKey,
-        at: place.at,
+        at: to.at,
         tile,
       };
       const previous = standing.current;
@@ -218,9 +194,12 @@ const Character = memo(
       standing.current = next;
       layout.current = fixedKey;
       let cancelled = false;
-      let running: Animated.CompositeAnimation | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let unpainted = () => {};
+      const place = (at: Point) => motion.set(restingAt({ x: at.x * tile, y: at.y * tile }, Date.now()));
 
-      const run = (legs: Leg[], done: () => void) => {
+      // `placed`: it was put somewhere a moment ago, and that has to be on screen before it can leave from there.
+      const run = (legs: Leg[], done: () => void, placed: boolean) => {
         const step = (index: number) => {
           if (cancelled) return;
           const leg = legs[index];
@@ -231,26 +210,27 @@ const Character = memo(
           }
           setWalking(leg.heading);
           setRow(leg.row);
-          stride.current = { leg, endsAt: Date.now() + leg.durationMs };
-          running = Animated.timing(position, {
-            toValue: { x: leg.to.x * tile, y: leg.to.y * tile },
-            duration: leg.durationMs,
-            easing: Easing.linear,
-            useNativeDriver: true,
+          const now = Date.now();
+          stride.current = { leg, endsAt: now + leg.durationMs };
+          motion.set({
+            from: glideAt(motion.get(), now),
+            to: { x: leg.to.x * tile, y: leg.to.y * tile },
+            ms: leg.durationMs,
+            at: now,
           });
-          running.start(({ finished }) => {
-            if (!finished) return;
+          timer = setTimeout(() => {
             where.current = { at: leg.to, aisleY: leg.to.y };
             step(index + 1);
-          });
+          }, leg.durationMs);
         };
-        step(0);
+        if (placed) unpainted = afterPaint(() => step(0));
+        else step(0);
       };
 
       const arrive = () => {
-        where.current = place;
+        where.current = to;
         setWalking(null);
-        setRow(place.at.y);
+        setRow(to.at.y);
         setGone(spot === "out");
         if (leaving) latest.current.onGone(agent.id);
         // That it has left its desk is told once, however often it arrives at the door afterwards.
@@ -263,19 +243,22 @@ const Character = memo(
 
       if (kind === "snap") {
         stride.current = null;
-        position.setValue({ x: place.at.x * tile, y: place.at.y * tile });
+        place(to.at);
         arrive();
       } else {
         setGone(false);
         const legs: Leg[] = [];
+        let placed = false;
         if (kind === "enter") {
           where.current = here.out;
-          position.setValue({ x: here.out.at.x * tile, y: here.out.at.y * tile });
+          place(here.out.at);
+          placed = true;
         } else if (reflowed && previous) {
           // The room moved while it changes spot: start from where its old spot is now.
           stride.current = null;
           where.current = here[previous.spot];
-          position.setValue({ x: where.current.at.x * tile, y: where.current.at.y * tile });
+          place(where.current.at);
+          placed = true;
         } else if (stride.current) {
           const { leg, endsAt } = stride.current;
           legs.push({ ...leg, durationMs: Math.max(60, endsAt - Date.now()) });
@@ -284,15 +267,16 @@ const Character = memo(
           const back = old !== null && old.at.x === leg.to.x && old.at.y === leg.to.y;
           where.current = back ? old : { at: leg.to, aisleY: leg.to.y };
         }
-        legs.push(...walkPath(where.current, place, corridorX));
-        run(legs, arrive);
+        legs.push(...walkPath(where.current, to, corridorX));
+        run(legs, arrive, placed);
       }
       return () => {
         cancelled = true;
-        running?.stop();
+        if (timer) clearTimeout(timer);
+        unpainted();
       };
       // `places` is read through `placesKey`.
-    }, [agent.id, breakKey, corridorX, entered, leaving, placesKey, position, reduced, seatKey, spot, tile]);
+    }, [agent.id, breakKey, corridorX, entered, leaving, placesKey, motion, reduced, seatKey, spot, tile]);
 
     const act = walking ? null : presence.act;
     const pose: CharacterPose = walking
@@ -302,17 +286,29 @@ const Character = memo(
         : presence.lounging
           ? "sit"
           : POSE[activity];
-    const beat = useFrame(reduced ? "off" : walking ? "walk" : pose === "type" || (act && act !== "read") ? "slow" : "off");
     // People across a table take turns: whoever faces right speaks on the even beats.
-    const frame = act && !reduced ? actFrame(act, beat, seedOf(agent.id, presence.facing)) : beat;
-    const emoteFrame = useFrame(!reduced && presence.emote !== null && walking === null ? "slow" : "off");
+    const seed = seedOf(agent.id, presence.facing);
+    const cycle = useMemo<Cycle>(
+      () =>
+        walking
+          ? WALK
+          : pose === "type"
+            ? TYPE
+            : act && act !== "read"
+              ? { frames: actCycle(act, seed), beatMs: BEAT_MS }
+              : STILL,
+      [walking !== null, pose, act, seed],
+    );
+    const emoteCycle = useMemo(() => (presence.emote ? loop(emoteFrames(presence.emote), BEAT_MS) : STILL), [presence.emote]);
+    const move = useMotion(motion);
     const height = tile * CHARACTER_HEIGHT;
     // The pressable itself is at least 44 px each way: a visitor or a wanderer has no desk cell behind it.
     const padX = touchSlop(tile);
     const padTop = Math.max(0, MIN_TOUCH - height);
     const hidden = gone && walking === null;
     return (
-      <Animated.View
+      <Mover
+        move={move}
         pointerEvents={hidden || leaving ? "none" : "auto"}
         style={{
           position: "absolute",
@@ -322,7 +318,6 @@ const Character = memo(
           height: tile,
           opacity: hidden ? 0 : dimmed ? DIMMED : 1,
           zIndex: row,
-          transform: position.getTranslateTransform(),
         }}
       >
         <Pressable
@@ -341,16 +336,22 @@ const Character = memo(
             paddingTop: padTop,
           }}
         >
-          <CharacterSprite
-            theme={theme}
-            tile={tile}
-            agentId={agent.id}
-            role={spriteRole(agent)}
-            pose={pose}
-            heading={walking ?? presence.facing}
-            frame={frame}
-            carry={presence.carry}
-            lift={walking ? 0 : presence.lift}
+          <Frames
+            cycle={cycle}
+            still={reduced}
+            render={(frame) => (
+              <CharacterSprite
+                theme={theme}
+                tile={tile}
+                agentId={agent.id}
+                role={spriteRole(agent)}
+                pose={pose}
+                heading={walking ?? presence.facing}
+                frame={frame}
+                carry={presence.carry}
+                lift={walking ? 0 : presence.lift}
+              />
+            )}
           />
         </Pressable>
         {visiting ? (
@@ -378,10 +379,14 @@ const Character = memo(
             // At the desk the emote sits to the right of the head, clear of the monitor.
             style={{ position: "absolute", left: spot === "seat" || spot === "stand" ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
           >
-            <EmoteSprite theme={theme} tile={tile} kind={presence.emote} frame={emoteFrame} />
+            <Frames
+              cycle={emoteCycle}
+              still={reduced}
+              render={(frame) => <EmoteSprite theme={theme} tile={tile} kind={presence.emote ?? "check"} frame={frame} />}
+            />
           </View>
         ) : null}
-      </Animated.View>
+      </Mover>
     );
   },
   (before, after) =>
@@ -393,7 +398,7 @@ const Character = memo(
     before.seatKey === after.seatKey &&
     before.corridorX === after.corridorX &&
     before.leaving === after.leaving &&
-    before.position === after.position &&
+    before.motion === after.motion &&
     before.visiting === after.visiting &&
     before.saying === after.saying &&
     before.selected === after.selected &&
@@ -508,7 +513,7 @@ const SpeechBubble = memo(function SpeechBubble({
   theme,
   tile,
   bubble,
-  position,
+  motion,
   home,
   clearance,
   officeWidth,
@@ -518,7 +523,7 @@ const SpeechBubble = memo(function SpeechBubble({
   tile: number;
   bubble: Bubble;
   /** The speaker's position, so the bubble walks with it. */
-  position: Animated.ValueXY;
+  motion: Motion;
   /** The speaker's tile at rest, for the tail. */
   home: Point;
   /** Tiles to keep clear between the head and the bubble. */
@@ -526,59 +531,30 @@ const SpeechBubble = memo(function SpeechBubble({
   officeWidth: number;
   still: boolean;
 }) {
-  const opacity = useRef(new Animated.Value(reduced ? 1 : 0)).current;
-  useEffect(() => {
-    if (reduced) {
-      opacity.setValue(1);
-      return;
-    }
-    const fade = Animated.timing(opacity, { toValue: 1, duration: 160, useNativeDriver: true });
-    fade.start();
-    return () => fade.stop();
-  }, [opacity, reduced]);
   const art = useMemo(
     () => ({ text: bubble.text, tone: bubble.tone, ...(bubble.status ? { status: bubble.status } : {}) }),
     [bubble.text, bubble.tone, bubble.status],
   );
   const available = officeWidth - 4;
   const { width, height } = bubbleSize(art, tile, available);
-  const track = useMemo(
-    () => bubbleTrack(width, height, tile, officeWidth, clearance * tile),
+  const follow = useMemo(
+    () => bubbleFollow(bubbleTrack(width, height, tile, officeWidth, clearance * tile)),
     [width, height, tile, officeWidth, clearance],
   );
+  const move = useFollow(motion, follow.place, follow.knotsX, follow.knotsY);
   // Where the speaker's head is under the bubble once the bubble has been kept inside the office.
   const centre = (home.x + 0.5) * tile;
   const left = Math.min(Math.max(2, centre - width / 2), Math.max(2, officeWidth - width - 2));
   return (
-    <Animated.View
+    <Mover
+      move={move}
       pointerEvents="none"
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width,
-        height,
-        opacity,
-        zIndex: ABOVE_ROOM + 1,
-        transform: [
-          {
-            translateX:
-              track.x.fixed ??
-              position.x.interpolate({ inputRange: track.x.inputRange, outputRange: track.x.outputRange, extrapolate: "clamp" }),
-          },
-          {
-            translateY: position.y.interpolate({
-              inputRange: track.y.inputRange,
-              outputRange: track.y.outputRange,
-              extrapolateLeft: "clamp",
-              extrapolateRight: "extend",
-            }),
-          },
-        ],
-      }}
+      style={{ position: "absolute", left: 0, top: 0, width, height, zIndex: ABOVE_ROOM + 1 }}
     >
-      <BubbleSprite theme={theme} tile={tile} art={art} availablePx={available} tail={centre - left} />
-    </Animated.View>
+      <FadeIn ms={160} still={reduced}>
+        <BubbleSprite theme={theme} tile={tile} art={art} availablePx={available} tail={centre - left} />
+      </FadeIn>
+    </Mover>
   );
 });
 
@@ -602,27 +578,27 @@ const Marker = memo(function Marker({
   still: boolean;
 }) {
   const path = useMemo(() => markerPath(exchange, office), [exchange, office]);
-  const progress = useRef(new Animated.Value(reduced ? 1 : markerProgress(exchange.at, Date.now()))).current;
+  // How far along it already was when it was first drawn here: it starts that far in.
+  const start = useMemo(() => markerProgress(exchange.at, Date.now()), [exchange.at]);
+  const resting = reduced || start >= 1;
+  // It is drawn at the sender first, unseen, so that the move has somewhere to start from.
+  const [sent, setSent] = useState(false);
   useEffect(() => {
-    if (reduced) {
-      progress.setValue(1);
-      return;
-    }
-    const start = markerProgress(exchange.at, Date.now());
-    progress.setValue(start);
-    const travel = Animated.timing(progress, {
-      toValue: 1,
-      duration: (1 - start) * MARKER_TRAVEL_MS,
-      easing: Easing.inOut(Easing.quad),
-      useNativeDriver: true,
-    });
-    travel.start();
-    return () => travel.stop();
-  }, [exchange.at, progress, reduced]);
+    if (resting) return;
+    setSent(false);
+    return afterPaint(() => setSent(true));
+  }, [exchange.at, resting]);
   if (!path) return null;
   // The envelope rides above the heads, so it does not cover the face it lands on.
   const lift = (CHARACTER_HEIGHT - 0.25) * tile;
   const link = linkBetween(path.from, path.to, tile);
+  const from = { x: path.from.x * tile, y: path.from.y * tile - lift };
+  const to = { x: path.to.x * tile, y: path.to.y * tile - lift };
+  const move: Move = resting
+    ? { ...to, ms: 0 }
+    : sent
+      ? { ...to, ms: MARKER_TRAVEL_MS, easing: "inOutQuad", delayMs: -start * MARKER_TRAVEL_MS }
+      : { ...from, ms: 0 };
   return (
     <>
       {reduced ? (
@@ -642,31 +618,13 @@ const Marker = memo(function Marker({
           }}
         />
       ) : null}
-      <Animated.View
+      <Mover
+        move={move}
         pointerEvents="none"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          zIndex: ABOVE_ROOM,
-          transform: [
-            {
-              translateX: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: [path.from.x * tile, path.to.x * tile],
-              }),
-            },
-            {
-              translateY: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: [path.from.y * tile - lift, path.to.y * tile - lift],
-              }),
-            },
-          ],
-        }}
+        style={{ position: "absolute", left: 0, top: 0, zIndex: ABOVE_ROOM, opacity: resting || sent ? 1 : 0 }}
       >
         <MarkerSprite theme={theme} tile={tile} />
-      </Animated.View>
+      </Mover>
     </>
   );
 });
@@ -919,7 +877,7 @@ export function OfficeScene({
   // and one that left a room that is still there walks out before it is dropped.
   const drawn = useRef<{ tile: number; rooms: Set<string>; cast: Map<string, CastMember> } | null>(null);
   const departing = useRef(new Map<string, CastMember>());
-  const positions = useRef(new Map<string, Animated.ValueXY>());
+  const motions = useRef(new Map<string, Motion>());
   const [, redraw] = useState(0);
   const before = drawn.current;
   const sameScale = before?.tile === tile;
@@ -932,19 +890,19 @@ export function OfficeScene({
     }
   } else departing.current.clear();
   const entering = (member: CastMember) => Boolean(before && sameScale && before.rooms.has(member.roomId) && !before.cast.has(member.agentId));
-  const positionOf = (member: CastMember, enter: boolean) => {
-    let position = positions.current.get(member.agentId);
-    if (!position) {
+  const motionOf = (member: CastMember, enter: boolean) => {
+    let motion = motions.current.get(member.agentId);
+    if (!motion) {
       const start = enter && !reduced ? member.places.out.at : member.places[spotOf(member.presence.activity)].at;
-      position = new Animated.ValueXY({ x: start.x * tile, y: start.y * tile });
-      positions.current.set(member.agentId, position);
+      motion = createMotion(restingAt({ x: start.x * tile, y: start.y * tile }, Date.now()));
+      motions.current.set(member.agentId, motion);
     }
-    return position;
+    return motion;
   };
   useEffect(() => {
     drawn.current = { tile, rooms: roomIds, cast };
-    for (const id of positions.current.keys()) {
-      if (!cast.has(id) && !departing.current.has(id)) positions.current.delete(id);
+    for (const id of motions.current.keys()) {
+      if (!cast.has(id) && !departing.current.has(id)) motions.current.delete(id);
     }
   });
   const onGone = useCallback((agentId: string) => {
@@ -1026,7 +984,7 @@ export function OfficeScene({
                 corridorX={member.corridorX}
                 enter={enter}
                 leaving={leaving}
-                position={positionOf(member, enter)}
+                motion={motionOf(member, enter)}
                 visiting={member.visiting}
                 saying={bubbles.get(member.agentId)?.label ?? null}
                 selected={selected === member.agentId}
@@ -1043,15 +1001,15 @@ export function OfficeScene({
           ))}
           {[...bubbles.values()].map((bubble) => {
             const member = cast.get(bubble.agentId);
-            const position = positions.current.get(bubble.agentId);
-            if (!member || !position || !member.presence.visible || dim(bubble.agentId)) return null;
+            const motion = motions.current.get(bubble.agentId);
+            if (!member || !motion || !member.presence.visible || dim(bubble.agentId)) return null;
             return (
               <SpeechBubble
                 key={`${bubble.agentId}:${bubble.key}`}
                 theme={theme}
                 tile={tile}
                 bubble={bubble}
-                position={position}
+                motion={motion}
                 home={member.places[spotOf(member.presence.activity)].at}
                 clearance={bubbleClearance(spotOf(member.presence.activity), member.presence.emote !== null)}
                 officeWidth={width}
