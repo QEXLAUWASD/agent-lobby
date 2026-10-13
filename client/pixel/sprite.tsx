@@ -4,6 +4,7 @@ import type { Bitmap } from "./grid";
 import { Lru } from "./lru";
 import type { Palette } from "./palette";
 import { pngDataUri } from "./png";
+import { crispScale, devicePixels, snap } from "./scale";
 
 /** A theme switch or a new pixel density re-encodes everything on screen; the old images age out. */
 export const URI_MAX_ENTRIES = 1024;
@@ -25,17 +26,23 @@ export function spriteUri(bitmap: Bitmap, palette: Palette, pixelScale: number):
 }
 
 /**
- * Sprite pixels are encoded at the device's resolution, rounded up, and shown at their layout
- * size. An image encoded at layout size is scaled by the platform on any dense screen and blurs.
+ * Sprite pixels are encoded at device resolution and shown at their layout size. An image encoded
+ * at layout size is scaled by the platform on any dense screen and blurs. `scale` should come from
+ * `crispScale`; any other value is drawn at the nearest whole number of device pixels and resampled.
  */
 export function devicePixelScale(scale: number): number {
-  return scale * Math.max(1, Math.ceil(PixelRatio.get()));
+  return devicePixels(scale, PixelRatio.get());
 }
+
+/** `crispScale` and `snap` for this device. */
+export const deviceCrispScale = (target: number, round?: "down" | "up" | "nearest") =>
+  crispScale(target, PixelRatio.get(), round);
+export const deviceSnap = (value: number) => snap(value, PixelRatio.get());
 
 export interface SpriteProps {
   sprite: Bitmap;
   palette: Palette;
-  /** Layout pixels per sprite pixel. Keep it a whole number. */
+  /** Layout pixels per art pixel. Take it from `crispScale`; fractions are fine on dense screens. */
   scale?: number;
   style?: StyleProp<ImageStyle>;
 }

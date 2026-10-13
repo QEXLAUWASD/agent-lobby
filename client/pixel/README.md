@@ -42,7 +42,10 @@ A tile is 16 px (`TILE`). Anchors are in sprite pixels from the top left.
 | lowTable | 16 × 7 | bottom centre | 1 |
 | beanbag | 16 × 12 | bottom centre | 1 |
 | rug (flat, drawn right after the floor) | 32 × 16 | bottom centre | 1 |
-| floor, floorAlt, wall, wallCap, carpet, kitchen, partition, door, doorway | 16 × 16 | 0, 0 | 1 |
+| screenH | 16 × 10 | bottom centre | 1 |
+| screenV | 4 × 22 | bottom centre | 1 |
+| every `tile(id)` and `wallTop(joins)` | 16 × 16 | 0, 0 | 1 |
+| door(faceRows) | 16 × 16·faceRows | 0, 0 | 1 |
 | bubble | text width + chrome (9 to `maxWidth`, default 120) × 15 | `tailX`, 15 (tip of the tail) | 1 |
 
 Put a character's anchor on the bottom centre of the tile it stands or sits on. A seated character
@@ -54,15 +57,35 @@ Roles differ in outline, not only colour: the overseer has a brimmed hat and a c
 headset with an antenna, a meow cat ears and a tail, a plain agent none of these. `lookFor(agentId)`
 picks skin, hair, hair style, shirt and trousers, the same every time for the same id.
 
+## Scale
+
+A sprite is sharp when one art pixel covers a whole number of device pixels. So the usable layout
+scales are k / pixelRatio: 0.5, 1, 1.5, 2 on a 2× screen; 1, 2, 3 on a 1× screen; 0.6, 1.2, 1.8 on a
+1.67× screen. `crispScale(target, pixelRatio, "down" | "up" | "nearest")` picks one, and
+`deviceCrispScale(target)` does it for the device. Pass the result to `<Sprite scale>`.
+
+Positions computed as whole art pixels times that scale land on device pixels by themselves. An
+offset that is not (centring a room in its pane, say) should go through `snap`, or the whole room
+sits half a device pixel off and softens. A backdrop and the sprites on it must share one scale.
+
 ## Walls and doors
 
-`wall` is a wall's front face, for the band under the top of a room. `partition` is a wall seen from
-above, for outlining rooms and dividing neighbours: it leans well toward the text
-colour on either theme, and has no border, so it joins along rows, down columns and round corners.
-`wallCap` is the older, paler top and is kept for callers that want a quiet edge.
+`wallTop(joins)` is a wall seen from above: a solid slab, outlined and bevelled on each side that
+does not join another wall tile. `wallTopAt(isWall, x, y)` reads the joins from the layout, so runs,
+ends, corners, tees and crossings need no tile choice. The slab leans well toward the text colour
+and is tested above 3:1 against every floor on both themes.
 
-A door through the top wall is `door` in the wall's top row (lintel, jambs, floor showing) with
-`doorway` in each wall-face row beneath it, so the opening runs down to the room's floor.
+`wall` is the wall's front face, for the rows under a horizontal wall. `door(faceRows)` is a wooden
+door for that face, one bitmap as tall as the face; the wall's top row above it stays plain wall.
+`tile("doormat")` is a floor tile with a mat for just inside. `tile("partition")`, `tile("door")`
+and `tile("doorway")` remain for older callers: the edgeless slab, the joined slab and `door(1)`.
+
+## Pods
+
+Two ways to mark a crew's area. `tile("pod0")` to `tile("pod3")` are quiet floor tints, each with
+its own weave (dots, horizontal lines, vertical lines, checks). `prop("screenH")` is a low cubicle
+screen along a row, 16 × 10; `prop("screenV")` runs down a column, 4 × 22, covering one tile of
+depth with its end face below. Both tile end to end and are y-sorted like any prop.
 
 ## Zones and use points
 
@@ -120,7 +143,7 @@ Every cache is bounded. Drawings and images dropped from one are made again on t
 | room composites | 32 most recently used, and 8 million pixels in total |
 | bubbles | 256 most recently used |
 | data URIs | 1024 most recently used, and 6 million characters in total |
-| props, tiles, emotes | the fixed set of drawings: 36 |
+| props, tiles, emotes | the fixed set of drawings: about 70, counting the 16 wall tops |
 | palettes | one per theme object, held weakly |
 
 Use `composite` to flatten a room's floor, walls and furniture into one bitmap, so the backdrop

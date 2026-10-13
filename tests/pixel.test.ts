@@ -17,7 +17,9 @@ import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "..
 import { Lru } from "../client/pixel/lru";
 import { SLOTS, lookFor, officePalette, paletteColor, slotIndex } from "../client/pixel/palette";
 import { adler32, crc32, deflate, encodeIndexedPng, pngDataUri, toBase64, upscale, type Rgba } from "../client/pixel/png";
-import { PROPS, PROP_USES, TILE, prop, tile, type PropId, type ScreenState } from "../client/pixel/props";
+import { PROPS, PROP_USES, TILE, door, prop, tile, wallTop, wallTopAt } from "../client/pixel/props";
+import type { PropId, ScreenState, TileId } from "../client/pixel/props";
+import { crispScale, devicePixels, snap } from "../client/pixel/scale";
 import { fitText, foldText, textWidth } from "../client/pixel/text";
 
 const LIGHT: PluginTheme = {
@@ -70,6 +72,24 @@ const PROP_IDS: PropId[] = [
   "lowTable",
   "beanbag",
   "rug",
+  "screenH",
+  "screenV",
+];
+const TILE_IDS: TileId[] = [
+  "floor",
+  "floorAlt",
+  "wall",
+  "wallCap",
+  "carpet",
+  "kitchen",
+  "partition",
+  "door",
+  "doorway",
+  "doormat",
+  "pod0",
+  "pod1",
+  "pod2",
+  "pod3",
 ];
 const LOOK = lookFor("agent-1");
 const bytes = (text: string) => Uint8Array.from(Buffer.from(text, "latin1"));
@@ -360,31 +380,80 @@ describe("props, tiles and emotes", () => {
     expect(new Set([colours("floor"), colours("carpet"), colours("kitchen")]).size).toBe(3);
   });
 
-  it("makes the partition stand off the floor on both themes", () => {
+  it("makes the wall stand off every floor on both themes", () => {
     for (const theme of [LIGHT, DARK]) {
       const palette = officePalette(theme);
-      for (const floor of ["floor", "floorAlt", "carpet", "kitchen"] as const) {
+      for (const floor of ["floor", "floorAlt", "carpet", "kitchen", "pod0", "pod1", "pod2", "pod3"] as const) {
         expect(contrast(paletteColor(palette, "partition"), paletteColor(palette, floor)), floor).toBeGreaterThan(3);
       }
     }
-    // No border pixels: every edge is the same two fills, so tiles join in any direction.
-    const fills = new Set([slotIndex("partition"), slotIndex("partitionShade")]);
-    expect([...tile("partition").pixels].every((value) => fills.has(value))).toBe(true);
   });
 
-  it("opens a doorway onto the floor", () => {
-    const floor = slotIndex("floor");
-    const opening = (id: "door" | "doorway", y: number) =>
-      [...tile(id).pixels.slice(y * 16, (y + 1) * 16)].filter((value) => value === floor).length;
-    expect(opening("doorway", 0)).toBe(10);
-    expect(opening("door", 0)).toBe(0);
-    expect(opening("door", 15)).toBe(10);
-    // The jambs line up, so door over doorway is one opening.
-    expect([...tile("door").pixels.slice(15 * 16)]).toEqual([...tile("doorway").pixels.slice(0, 16)]);
+  it("edges a wall top only where it does not join another wall", () => {
+    const outline = slotIndex("outline");
+    const edge = (bitmap: Bitmap, side: "n" | "e" | "s" | "w") =>
+      Array.from({ length: 14 }, (_, i) => i + 1).every((i) => {
+        const [x, y] = side === "n" ? [i, 0] : side === "s" ? [i, 15] : side === "w" ? [0, i] : [15, i];
+        return bitmap.pixels[y! * 16 + x!] === outline;
+      });
+    const all = new Set<string>();
+    for (let mask = 0; mask < 16; mask++) {
+      const joins = { n: !!(mask & 1), e: !!(mask & 2), s: !!(mask & 4), w: !!(mask & 8) };
+      const top = wallTop(joins);
+      expect([top.width, top.height, top.anchor]).toEqual([16, 16, { x: 0, y: 0 }]);
+      expect(opaque(top).every(Boolean)).toBe(true);
+      for (const side of ["n", "e", "s", "w"] as const) expect(edge(top, side), `${mask} ${side}`).toBe(!joins[side]);
+      expect(wallTop(joins)).toBe(top);
+      all.add(top.pixels.join());
+    }
+    expect(all.size).toBe(16);
+    // An inside corner closes with one outline pixel; a straight run has none on its joined ends.
+    expect(wallTop({ e: true, s: true }).pixels[15 * 16 + 15]).toBe(outline);
+    expect(wallTop({ e: true, w: true }).pixels[8 * 16]).not.toBe(outline);
+  });
+
+  it("reads a wall tile's joins from its neighbours", () => {
+    // A room outline, 5 by 4: the top-left corner joins east and south only.
+    const isWall = (x: number, y: number) =>
+      x >= 0 && y >= 0 && x < 5 && y < 4 && (x === 0 || y === 0 || x === 4 || y === 3);
+    expect(wallTopAt(isWall, 0, 0)).toBe(wallTop({ e: true, s: true }));
+    expect(wallTopAt(isWall, 2, 0)).toBe(wallTop({ e: true, w: true }));
+    expect(wallTopAt(isWall, 4, 2)).toBe(wallTop({ n: true, s: true }));
+  });
+
+  it("draws a door of any face height, with a knob and no holes", () => {
+    for (const rows of [1, 2, 3]) {
+      const drawn = door(rows);
+      expect([drawn.width, drawn.height, drawn.anchor]).toEqual([16, 16 * rows, { x: 0, y: 0 }]);
+      expect(opaque(drawn).every(Boolean)).toBe(true);
+      expect([...drawn.pixels].filter((value) => value === slotIndex("metalLight"))).toHaveLength(2);
+    }
+    expect(door(1)).toBe(tile("doorway"));
+    expect(door(99)).toBe(door(4));
+    // Above a door the wall's top runs on, joined to both sides.
+    expect(tile("door").pixels).toEqual(wallTop({ e: true, w: true }).pixels);
+  });
+
+  it("gives each pod floor its own weave and tint", () => {
+    const weaves = [0, 1, 2, 3].map((index) => {
+      const base = slotIndex(`pod${index}` as "pod0");
+      return Array.from(tile(`pod${index}` as TileId).pixels, (value) => (value === base ? 0 : 1));
+    });
+    for (let a = 0; a < weaves.length; a++) {
+      expect(weaves[a]!.some(Boolean)).toBe(true);
+      for (let b = a + 1; b < weaves.length; b++) expect(difference(weaves[a]!, weaves[b]!)).toBeGreaterThan(20);
+    }
+    for (const theme of [LIGHT, DARK]) {
+      const palette = officePalette(theme);
+      const tints = (["pod0", "pod1", "pod2", "pod3", "floor", "carpet", "kitchen"] as const).map((slot) =>
+        paletteColor(palette, slot).join(),
+      );
+      expect(new Set(tints).size).toBe(tints.length);
+    }
   });
 
   it("draws square tiles with no holes", () => {
-    for (const id of ["floor", "floorAlt", "wall", "wallCap", "carpet", "kitchen", "partition", "door", "doorway"] as const) {
+    for (const id of TILE_IDS) {
       const sprite = tile(id);
       expect([sprite.width, sprite.height]).toEqual([TILE, TILE]);
       expect(opaque(sprite).every(Boolean)).toBe(true);
@@ -601,5 +670,40 @@ describe("bubbles", () => {
     const again = bubble({ text: "bound 0", tone: "say" });
     expect(again).not.toBe(first);
     expect(again.pixels).toEqual(first.pixels);
+  });
+});
+
+describe("scale", () => {
+  it("offers only whole numbers of device pixels per art pixel", () => {
+    expect([0.4, 1, 1.4, 1.5, 1.9, 2].map((target) => crispScale(target, 2))).toEqual([0.5, 1, 1, 1.5, 1.5, 2]);
+    expect([0.5, 1, 1.5, 2.9].map((target) => crispScale(target, 1))).toEqual([1, 1, 1, 2]);
+    expect(crispScale(1.5, 3)).toBeCloseTo(4 / 3);
+    const ratio = 5 / 3;
+    for (const target of [1, 1.2, 1.5, 2]) {
+      const scale = crispScale(target, ratio);
+      expect(scale).toBeLessThanOrEqual(target + 1e-9);
+      expect(scale * ratio).toBeCloseTo(Math.round(scale * ratio));
+    }
+    expect(crispScale(1.2, ratio)).toBeCloseTo(1.2);
+  });
+
+  it("rounds up or to the nearest when asked", () => {
+    expect(crispScale(1.4, 2, "up")).toBe(1.5);
+    expect(crispScale(1.5, 2, "up")).toBe(1.5);
+    expect(crispScale(1.2, 2, "nearest")).toBe(1);
+    expect(crispScale(1.3, 2, "nearest")).toBe(1.5);
+    expect(crispScale(1.4, 1, "up")).toBe(2);
+  });
+
+  it("encodes at the device pixels the scale stands for", () => {
+    expect(devicePixels(1.5, 2)).toBe(3);
+    expect(devicePixels(crispScale(1.5, 5 / 3), 5 / 3)).toBe(2);
+    expect(devicePixels(0.1, 1)).toBe(1);
+  });
+
+  it("snaps a length to the device grid", () => {
+    expect(snap(10.3, 2)).toBe(10.5);
+    expect(snap(10.3, 1)).toBe(10);
+    expect(snap(7.2, 5 / 3) * (5 / 3)).toBeCloseTo(12);
   });
 });

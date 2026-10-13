@@ -87,6 +87,15 @@ const FIXED_SLOTS = [
   "kitchenAlt",
   "partition",
   "partitionShade",
+  "partitionLight",
+  "pod0",
+  "pod0Shade",
+  "pod1",
+  "pod1Shade",
+  "pod2",
+  "pod2Shade",
+  "pod3",
+  "pod3Shade",
 ] as const;
 
 export type Slot =
@@ -179,9 +188,9 @@ function build(theme: PluginTheme): Palette {
     floor: surface1,
     floorAlt: mix(surface1, foreground, 0.025),
     floorSeam: mix(surface1, foreground, 0.06),
-    wall: mix(surface2, foreground, 0.06),
-    wallShade: mix(surface2, foreground, 0.16),
-    wallTrim: mix(surface2, foreground, 0.34),
+    wall: mix(surface2, foreground, 0.12),
+    wallShade: mix(surface2, foreground, 0.24),
+    wallTrim: mix(surface2, foreground, 0.42),
     wood,
     woodShade: darken(wood, 0.24),
     woodLight: lighten(wood, 0.2),
@@ -217,7 +226,13 @@ function build(theme: PluginTheme): Palette {
     // Room dividers lean well toward the text colour, so they stand off the floor on either theme.
     partition: mix(surface1, foreground, 0.6),
     partitionShade: mix(surface1, foreground, 0.72),
+    partitionLight: mix(surface1, foreground, 0.46),
   };
+  // Pod floors: four quiet tints of the plain floor, told apart by their weave as much as their hue.
+  ["#6f9fd8", "#d8a64f", "#a884d0", "#58b8a6"].forEach((hex, index) => {
+    colors[`pod${index}`] = mix(surface1, parseColor(hex), dark ? 0.14 : 0.16);
+    colors[`pod${index}Shade`] = mix(surface1, parseColor(hex), dark ? 0.3 : 0.36);
+  });
   SKINS.forEach((hex, index) => {
     colors[`skin${index}`] = parseColor(hex);
     colors[`skinShade${index}`] = darken(parseColor(hex), 0.18);

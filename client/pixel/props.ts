@@ -1,4 +1,5 @@
-import { blit, paint, row, type Bitmap, type Legend, type Point } from "./grid";
+import { blit, canvas, paint, row, type Bitmap, type Canvas, type Legend, type Point } from "./grid";
+import { slotIndex, type Slot } from "./palette";
 
 /**
  * Furniture and floor. A tile is 16 x 16; a prop's anchor is its bottom centre, to be put on the
@@ -38,8 +39,6 @@ export const PROP_LEGEND: Legend = {
   "8": "carpetShade",
   "9": "kitchen",
   "0": "kitchenAlt",
-  q: "partition",
-  Q: "partitionShade",
 };
 
 export type ScreenState = "lit" | "off" | "error";
@@ -57,7 +56,9 @@ export type PropId =
   | "bookshelf"
   | "lowTable"
   | "beanbag"
-  | "rug";
+  | "rug"
+  | "screenH"
+  | "screenV";
 export type TileId =
   | "floor"
   | "floorAlt"
@@ -67,7 +68,12 @@ export type TileId =
   | "kitchen"
   | "partition"
   | "door"
-  | "doorway";
+  | "doorway"
+  | "doormat"
+  | "pod0"
+  | "pod1"
+  | "pod2"
+  | "pod3";
 
 /** An office chair seen from behind, one tile. Seated back-view characters carry the same drawing. */
 export const CHAIR_ROWS = [
@@ -365,15 +371,103 @@ const KITCHEN_ROWS = Array.from({ length: 16 }, (_, y) =>
   Array.from({ length: 16 }, (_, x) => ((x >> 3) + (y >> 3)) % 2 ? "0" : "9").join(""),
 );
 
-// A dividing wall seen from above. It has no edge of its own, so it joins along a row, down a
-// column and round a corner without a seam.
-const PARTITION_ROWS = Array.from({ length: 16 }, (_, y) =>
-  Array.from({ length: 16 }, (_, x) => ((x + y) % 8 === 0 ? "Q" : "q")).join(""),
-);
-// A doorway through a wall across the top of a room: floor between two jambs. `door` has the lintel
-// and goes in the wall's top row; `doorway` continues the opening through any wall-face rows below.
-const DOORWAY_ROWS = Array.from({ length: 16 }, () => row("odo", ["1", 10], "odo"));
-const DOOR_ROWS = [row(["o", 16]), row("o", ["l", 14], "o"), row("o", ["d", 14], "o"), row(["o", 16]), ...DOORWAY_ROWS.slice(4)];
+/** Which of a wall tile's four neighbours are wall too. */
+export interface WallJoins {
+  readonly n?: boolean;
+  readonly e?: boolean;
+  readonly s?: boolean;
+  readonly w?: boolean;
+}
+
+/**
+ * The top of a wall seen from above: a solid slab, outlined and bevelled on every side that does
+ * not continue into another wall tile. Where two joined sides meet, the corner pixel is outlined,
+ * so an inside corner closes. One function covers runs, ends, corners, tees and crossings.
+ */
+function drawWallTop({ n = false, e = false, s = false, w = false }: WallJoins): Canvas {
+  const out = canvas(TILE, TILE);
+  const last = TILE - 1;
+  const [fill, light, shade, outline] = (["partition", "partitionLight", "partitionShade", "outline"] as const).map(slotIndex);
+  out.pixels.fill(fill!);
+  const set = (x: number, y: number, value: number) => {
+    out.pixels[y * TILE + x] = value;
+  };
+  for (let i = 0; i < TILE; i++) {
+    if (!n) set(i, 1, light!);
+    if (!w) set(1, i, light!);
+    if (!s) set(i, last - 1, shade!);
+    if (!e) set(last - 1, i, shade!);
+  }
+  for (let i = 0; i < TILE; i++) {
+    if (!n) set(i, 0, outline!);
+    if (!s) set(i, last, outline!);
+    if (!w) set(0, i, outline!);
+    if (!e) set(last, i, outline!);
+  }
+  if (n && w) set(0, 0, outline!);
+  if (n && e) set(last, 0, outline!);
+  if (s && w) set(0, last, outline!);
+  if (s && e) set(last, last, outline!);
+  return out;
+}
+
+/**
+ * A door in a wall's front face, `faceRows` tiles tall: frame, a panelled wooden leaf and a knob.
+ * The wall's top row above it stays plain wall.
+ */
+function drawDoor(faceRows: number): Canvas {
+  const height = faceRows * TILE;
+  const lines = [row(["o", 16]), row("o", ["l", 14], "o"), row(["o", 16])];
+  const knob = Math.floor(height * 0.6);
+  for (let y = lines.length; y < height - 1; y++) {
+    const inPanel = y >= 5 && y <= height - 4;
+    const edge = y === 5 || y === height - 4;
+    let leaf = inPanel ? (edge ? row("d", ["D", 8], "d") : row("dD", ["d", 6], "Dd")) : row(["d", 10]);
+    if (y === knob || y === knob + 1) leaf = `${leaf.slice(0, 8)}n${leaf.slice(9)}`;
+    lines.push(row("olo", leaf, "olo"));
+  }
+  lines.push(row(["o", 16]));
+  return paint(lines, PROP_LEGEND);
+}
+
+// A full floor tile with a mat on it, for the tile just inside a door.
+const DOORMAT_ROWS = [
+  ...Array.from({ length: 3 }, () => row(["1", 15], "3")),
+  row("11", ["P", 12], "13"),
+  ...Array.from({ length: 6 }, () => row("11P", ["p", 10], "P13")),
+  row("11", ["P", 12], "13"),
+  ...Array.from({ length: 4 }, () => row(["1", 15], "3")),
+  row(["3", 16]),
+];
+
+/** A floor tile in two slots: `shade` wherever `weave` says, `base` elsewhere. */
+function drawWeave(base: Slot, shade: Slot, weave: (x: number, y: number) => boolean): Canvas {
+  const out = canvas(TILE, TILE);
+  for (let y = 0; y < TILE; y++) {
+    for (let x = 0; x < TILE; x++) out.pixels[y * TILE + x] = slotIndex(weave(x, y) ? shade : base);
+  }
+  return out;
+}
+// Each pod floor has its own weave, so pods differ in pattern as well as tint.
+const POD_WEAVES: readonly ((x: number, y: number) => boolean)[] = [
+  (x, y) => x % 4 === 1 && y % 4 === 1,
+  (_, y) => y % 4 === 3,
+  (x) => x % 4 === 3,
+  (x, y) => ((x >> 1) + (y >> 1)) % 2 === 0 && (x >> 1) % 2 === 0,
+];
+
+// Low cubicle screens. `screenH` runs along a row; `screenV` runs down a column, covering one tile
+// of depth and showing its end face for six rows below.
+const SCREEN_H_ROWS = [
+  row(["o", 16]),
+  row("o", ["n", 14], "o"),
+  row(["o", 16]),
+  row("ou", ["f", 13], "o"),
+  ...Array.from({ length: 4 }, () => row("o", ["f", 14], "o")),
+  row("o", ["F", 14], "o"),
+  row(["o", 16]),
+];
+const SCREEN_V_ROWS = ["oooo", ...Array.from({ length: 14 }, () => "onmo"), "oooo", ...Array.from({ length: 5 }, () => "ofFo"), "oooo"];
 
 const FLOOR_ROWS = [...Array.from({ length: 15 }, () => row(["1", 15], "3")), row(["3", 16])];
 const FLOOR_ALT_ROWS = FLOOR_ROWS.map((line) => line.replace(/1/g, "2"));
@@ -442,6 +536,8 @@ export const PROP_USES: Readonly<Record<PropId, readonly UsePoint[]>> = {
   plant: [],
   lowTable: [],
   rug: [],
+  screenH: [],
+  screenV: [],
   sofa: [use(0, 0, "sit", "down", 4), use(1, 0, "sit", "down", 4)],
   beanbag: [use(0, 0, "sit", "down", 3)],
   coffee: [use(0, 1, "idle", "up")],
@@ -479,6 +575,8 @@ export const PROPS: Readonly<Record<PropId, PropInfo>> = {
   lowTable: info(LOW_TABLE_ROWS, 1),
   beanbag: info(BEANBAG_ROWS, 1),
   rug: info(RUG_ROWS, 2),
+  screenH: info(SCREEN_H_ROWS, 1),
+  screenV: info(SCREEN_V_ROWS, 1),
 };
 
 const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk">, readonly string[]>> = {
@@ -495,18 +593,37 @@ const STATIC_ROWS: Readonly<Record<Exclude<PropId, "desk">, readonly string[]>> 
   lowTable: LOW_TABLE_ROWS,
   beanbag: BEANBAG_ROWS,
   rug: RUG_ROWS,
+  screenH: SCREEN_H_ROWS,
+  screenV: SCREEN_V_ROWS,
 };
-const TILE_ROWS: Readonly<Record<TileId, readonly string[]>> = {
+const TILE_ROWS: Readonly<Partial<Record<TileId, readonly string[]>>> = {
   floor: FLOOR_ROWS,
   floorAlt: FLOOR_ALT_ROWS,
   wall: WALL_ROWS,
   wallCap: WALL_CAP_ROWS,
   carpet: CARPET_ROWS,
   kitchen: KITCHEN_ROWS,
-  partition: PARTITION_ROWS,
-  door: DOOR_ROWS,
-  doorway: DOORWAY_ROWS,
+  doormat: DOORMAT_ROWS,
 };
+
+function drawTile(id: TileId): Canvas {
+  const rows = TILE_ROWS[id];
+  if (rows) return paint(rows, PROP_LEGEND);
+  switch (id) {
+    // Kept for callers not yet on `wallTop`: the slab with no edges.
+    case "partition":
+      return drawWallTop({ n: true, e: true, s: true, w: true });
+    // Above a door the wall carries on; the door itself is in the face rows.
+    case "door":
+      return drawWallTop({ e: true, w: true });
+    case "doorway":
+      return drawDoor(1);
+    default: {
+      const index = Number(id.slice(3));
+      return drawWeave(`pod${index}` as Slot, `pod${index}Shade` as Slot, POD_WEAVES[index]!);
+    }
+  }
+}
 
 function drawDesk(screen: ScreenState, frame: number) {
   const desk = paint(DESK_ROWS, PROP_LEGEND);
@@ -545,5 +662,29 @@ export function prop(id: PropId, options: PropOptions = {}): Bitmap {
 }
 
 export function tile(id: TileId): Bitmap {
-  return cached(`t:${id}`, { x: 0, y: 0 }, () => paint(TILE_ROWS[id], PROP_LEGEND));
+  return cached(`t:${id}`, { x: 0, y: 0 }, () => drawTile(id));
+}
+
+const joinBit = (joined: boolean | undefined, bit: number) => (joined ? bit : 0);
+
+/** A wall tile seen from above; say which neighbours are wall and the edges and corners follow. */
+export function wallTop(joins: WallJoins = {}): Bitmap {
+  const mask = joinBit(joins.n, 1) | joinBit(joins.e, 2) | joinBit(joins.s, 4) | joinBit(joins.w, 8);
+  return cached(`w:${mask}`, { x: 0, y: 0 }, () => drawWallTop(joins));
+}
+
+/** `wallTop` for the tile at (`x`, `y`), reading its four neighbours from `isWall`. */
+export function wallTopAt(isWall: (x: number, y: number) => boolean, x: number, y: number): Bitmap {
+  return wallTop({ n: isWall(x, y - 1), e: isWall(x + 1, y), s: isWall(x, y + 1), w: isWall(x - 1, y) });
+}
+
+const MAX_DOOR_ROWS = 4;
+
+/**
+ * A door for the wall's front face, as one bitmap `faceRows` tiles tall with its anchor at the top
+ * left. `tile("doorway")` is the one-row door.
+ */
+export function door(faceRows = 1): Bitmap {
+  const rows = Math.min(MAX_DOOR_ROWS, Math.max(1, Math.floor(faceRows)));
+  return rows === 1 ? tile("doorway") : cached(`d:${rows}`, { x: 0, y: 0 }, () => drawDoor(rows));
 }
