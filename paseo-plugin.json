@@ -1,5 +1,16 @@
 {
   "id": "lobby",
+  "name": "Agent Lobby",
+  "description": "A plugin that shows your agents as a small pixel-art office.",
+  "icon": "docs/icon.png",
+  "media": [
+    "docs/lobby-surface-light.png",
+    "docs/lobby-pane-light.png",
+    "docs/lobby-closeup-light.png",
+    "docs/lobby-list-light.png",
+    "docs/lobby-surface-dark.png",
+    "docs/lobby-pane-dark.png"
+  ],
   "requirements": {
     "paseo": ">=0.11.2"
   }
