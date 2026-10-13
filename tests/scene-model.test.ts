@@ -49,24 +49,31 @@ function agent(overrides: Partial<PaseoAgent> & { id: string }, parent?: string)
   } as PaseoAgent;
 }
 
-const officeOf = (agents: PaseoAgent[], width = 30, roomColumns = 1) =>
-  layoutOffice(groupByWorkspace(buildForest(agents, null), new Map()), { width, roomColumns });
+const officeOf = (agents: PaseoAgent[], width = 12) =>
+  layoutOffice(groupByWorkspace(buildForest(agents, null), new Map()), { width });
 
 describe("sceneScale", () => {
-  it("draws a phone and an Explorer pane at 2×, a wide surface at 3×, and never below 1×", () => {
-    expect(sceneScale(390)).toEqual({ scale: 2, tile: 32, widthTiles: 12 });
-    expect(sceneScale(352)).toEqual({ scale: 2, tile: 32, widthTiles: 11 });
-    expect(sceneScale(1152)).toEqual({ scale: 3, tile: 48, widthTiles: 24 });
-    expect(sceneScale(1151)).toEqual({ scale: 2, tile: 32, widthTiles: 35 });
-    expect(sceneScale(290)).toEqual({ scale: 2, tile: 32, widthTiles: 9 });
-    expect(sceneScale(255)).toEqual({ scale: 1, tile: 16, widthTiles: 15 });
+  it("draws small: one and a half to one in a side pane, one to one in a pane too narrow for a room", () => {
+    expect(sceneScale(320)).toEqual({ scale: 1.5, tile: 24, widthTiles: 13 });
+    expect(sceneScale(390)).toEqual({ scale: 1.5, tile: 24, widthTiles: 16 });
+    expect(sceneScale(1400)).toEqual({ scale: 1.5, tile: 24, widthTiles: 58 });
+    expect(sceneScale(216)).toEqual({ scale: 1.5, tile: 24, widthTiles: 9 });
+    expect(sceneScale(215)).toEqual({ scale: 1, tile: 16, widthTiles: 13 });
     expect(sceneScale(0)).toEqual({ scale: 1, tile: 16, widthTiles: 0 });
-    // A view of many rooms caps the scale.
-    expect(sceneScale(1600, 2)).toEqual({ scale: 2, tile: 32, widthTiles: 50 });
   });
 
-  it("keeps a desk cell at or above the touch minimum at every scale", () => {
-    for (const width of [200, 390, 800, 1600]) expect(sceneScale(width).tile * 3).toBeGreaterThanOrEqual(MIN_TOUCH);
+  it("keeps one art pixel a whole number of device pixels", () => {
+    for (const ratio of [1, 1.25, 1.5, 1.67, 2, 2.625, 3]) {
+      for (const width of [200, 320, 900]) {
+        const { scale } = sceneScale(width, ratio);
+        expect(Math.abs(scale * ratio - Math.round(scale * ratio))).toBeLessThan(1e-9);
+        expect(scale).toBeGreaterThanOrEqual(1);
+        expect(scale).toBeLessThanOrEqual(1.6 + 1e-9);
+      }
+    }
+    expect(sceneScale(320, 1).scale).toBe(1);
+    expect(sceneScale(320, 1.67).scale).toBeCloseTo(2 / 1.67);
+    expect(sceneScale(320, 3).scale).toBeCloseTo(4 / 3);
   });
 });
 
@@ -232,7 +239,6 @@ describe("markerPath", () => {
     const lead = agent({ id: "lead", workspaceId: "ws-a", labels: { "paseo.parent-agent-id": "boss" } });
     const visited = layoutOffice(groupByWorkspace(buildForest([boss, lead], "ws-a"), new Map()), {
       width: 30,
-      roomColumns: 1,
       agents: new Map([boss, lead].map((entry) => [entry.id, entry])),
     });
     const spot = visited.visitors.get("boss")?.at;

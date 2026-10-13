@@ -8,8 +8,8 @@ Two surfaces share one component:
 - **Explorer pane and workspace tab** (`Crew`): the room of the current workspace, which can widen
   to every workspace. Managed children stay in their crew even when they run in another workspace,
   and a crew's parent from another workspace stands in the lounge as a visitor.
-- **Sidebar item** (`Crew`): every workspace at once, as one floor plan: adjoining rooms that share
-  their partition walls, each with its door. Workspaces whose agents
+- **Sidebar item** (`Crew`): every workspace at once, as one floor plan: rooms of different sizes
+  that share their walls, each with its door. Workspaces whose agents
   are all closed stay folded away until a search or the Closed filter asks for them. This is the
   wide view.
 
@@ -22,14 +22,23 @@ Two surfaces share one component:
 | Failed | at the desk, error screen, a cross |
 | Ready | standing by the desk with a check |
 | Idle | on a break for 15 minutes (at the pantry, the shelves or the sofa, moving on every few minutes), then asleep at the desk |
-| Closed | an empty desk, labelled |
+| Closed | no desk: it walks out, and the room's plate on the top wall counts it |
 
 The `ghostline/role` label picks the outline: a hat and cape for an Overseer, a headset for a Nexus,
 cat ears and a tail for a Meow. Labels are display only; the plugin grants nothing.
 
-A seat never depends on state. It comes from who an agent's parent is and when it was created, so
-nobody moves when somebody else changes state or arrives. Search and the state chips dim everyone
-who does not match, in place.
+The office is small on purpose: it lives in a side pane and is meant to be glanced at. It is drawn
+at about one and a half screen pixels to the art pixel, moved to the nearest size the display can
+draw without blur.
+
+A seat comes from who an agent's parent is and when it was created, never from what it is doing,
+so nobody moves when somebody else starts, finishes or arrives. The one thing that frees a desk is
+closing: the agent walks out, and only then do the teammates seated after it walk one desk up. A
+room is as large as what it holds, with each team of a crew on a floor of its own and the pantry and
+lounge beside the desks where the pane is wide enough, under them where it is not. Pressing the
+plate on a room's top wall lists its closed agents, each with what can still be done with it.
+Search and the state chips dim everyone who does not match, in place, and mark the plate of a room
+with a closed agent that matches.
 
 Characters walk. When an agent starts work, finishes, goes on a break or closes, its character
 walks there at one pace along the aisle and the room's corridor; a new agent walks in from the door

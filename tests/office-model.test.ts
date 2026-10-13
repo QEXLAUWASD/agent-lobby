@@ -19,6 +19,7 @@ import {
   presences,
   type Office,
   type Rect,
+  type Room,
 } from "../client/office-model";
 
 let clock = 0;
@@ -47,9 +48,8 @@ function agent(overrides: Partial<PaseoAgent> & { id: string }, parent?: string)
   } as PaseoAgent;
 }
 
-function office(agents: PaseoAgent[], width: number, roomColumns?: number): Office {
-  const groups = groupByWorkspace(buildForest(agents, null), new Map());
-  return layoutOffice(groups, { width, ...(roomColumns ? { roomColumns } : {}) });
+function office(agents: PaseoAgent[], width: number): Office {
+  return layoutOffice(groupByWorkspace(buildForest(agents, null), new Map()), { width });
 }
 
 const cells = (layout: Office) => new Map([...layout.desks].map(([id, desk]) => [id, `${desk.cell.x},${desk.cell.y}`]));
@@ -70,37 +70,42 @@ function crew(): PaseoAgent[] {
 }
 
 describe("layoutOffice", () => {
-  it("gives every agent one desk, inside its pod, inside its room, overlapping nobody", () => {
-    for (const width of [20, 31, 48, 120]) {
-      const agents = [...crew(), agent({ id: "elsewhere", workspaceId: "ws-b" })];
+  it("gives every agent who is in one desk, inside its pod, inside its room, overlapping nobody", () => {
+    for (const width of [9, 13, 20, 31, 48, 120]) {
+      const agents = [...crew(), agent({ id: "elsewhere", workspaceId: "ws-b" }), agent({ id: "third", workspaceId: "ws-c" })];
       const layout = office(agents, width);
       expect(layout.desks.size).toBe(agents.length);
       expect(new Set(cells(layout).values()).size).toBe(agents.length);
       for (const room of layout.rooms) {
+        expect(room.x).toBeGreaterThanOrEqual(0);
         expect(room.x + room.width).toBeLessThanOrEqual(layout.width);
         expect(room.y + room.height).toBeLessThanOrEqual(layout.height);
         expect(inside(room.lounge, room)).toBe(true);
         expect(inside(room.header, room)).toBe(true);
+        expect(inside(room.lounge.walkway, room)).toBe(true);
         for (const pod of room.pods) {
           expect(inside(pod, room)).toBe(true);
-          expect(pod.y + pod.height).toBeLessThanOrEqual(room.lounge.y);
+          expect(pod.x).toBeGreaterThan(room.corridorX);
           for (const team of pod.teams) {
             expect(inside(team.area, pod)).toBe(true);
             for (const desk of team.desks) {
               expect(inside({ ...desk.cell, width: DESK_WIDTH, height: DESK_HEIGHT }, team.area)).toBe(true);
             }
           }
+          // Desks and zones never share a tile.
+          for (const zone of room.zones) {
+            const apart = pod.x + pod.width <= zone.x || zone.x + zone.width <= pod.x || pod.y + pod.height <= zone.y || zone.y + zone.height <= pod.y;
+            expect(apart).toBe(true);
+          }
         }
-        expect(inside(room.lounge.walkway, room.lounge)).toBe(true);
         for (const zone of room.zones) {
-          expect(inside(zone, room.lounge)).toBe(true);
+          expect(inside(zone, room)).toBe(true);
           expect(zone.x).toBeGreaterThan(room.corridorX);
-          for (const spot of zone.spots) expect(inside({ ...spot, width: 1, height: 1 }, zone)).toBe(true);
+          for (const spot of zone.spots) expect(inside({ ...spot, width: 1, height: 1 }, room)).toBe(true);
         }
       }
-      const rooms = layout.rooms;
-      for (const a of rooms) {
-        for (const b of rooms) {
+      for (const a of layout.rooms) {
+        for (const b of layout.rooms) {
           if (a === b) continue;
           // Neighbours share a wall, one tile thick, and nothing more.
           const apart =
@@ -130,7 +135,6 @@ describe("layoutOffice", () => {
     });
     expect(layout.desks.get("nexus")).toMatchObject({ leadId: "overseer", role: "Nexus", depth: 1 });
     expect(layout.desks.get("overseer")).toMatchObject({ seatKey: "overseer/overseer/0", parentId: null });
-    // Agents on their own take a single desk each.
     expect(room?.pods.filter((entry) => entry.width === DESK_WIDTH).map((entry) => entry.rootId)).toEqual(["solo-1", "solo-2"]);
     const desk = layout.desks.get("meow-a");
     expect(desk?.seat).toEqual({ x: (desk?.cell.x ?? 0) + 0.5, y: (desk?.cell.y ?? 0) + 1 });
@@ -139,12 +143,12 @@ describe("layoutOffice", () => {
     expect(desk?.aisleY).toBe((desk?.cell.y ?? 0) + 2);
   });
 
-  it("does not move anyone when states change", () => {
+  it("does not move anyone when states change short of closing", () => {
     const agents = crew();
     const before = cells(office(agents, 48));
     const shaken = agents.map((entry, index) => ({
       ...entry,
-      status: (["running", "error", "closed", "idle"] as const)[index % 4],
+      status: (["running", "error", "idle", "idle"] as const)[index % 4],
       requiresAttention: index % 2 === 0,
       attentionReason: index % 2 === 0 ? ("finished" as const) : null,
       updatedAt: new Date(Date.parse(entry.updatedAt) + index * 77_000).toISOString(),
@@ -154,34 +158,26 @@ describe("layoutOffice", () => {
     expect(cells(office([...shaken].reverse(), 48))).toEqual(before);
   });
 
-  it("does not move anyone when agents arrive: a new teammate, a new team, a new solo, a new room", () => {
+  it("keeps everybody's seat key when agents arrive: a new teammate, a new team, a new solo, a new room", () => {
     const agents = crew();
-    const before = cells(office(agents, 48, 1));
-    const grown = [
-      ...agents,
-      agent({ id: "meow-d" }, "nexus"),
-      agent({ id: "helper" }, "meow-a"),
-      agent({ id: "solo-3" }),
-      agent({ id: "other-room", workspaceId: "ws-b" }),
-    ];
-    const after = cells(office(grown, 48, 1));
-    for (const [id, cell] of before) expect(after.get(id)).toBe(cell);
-    const layout = office(grown, 48, 1);
-    expect(layout.desks.get("helper")).toMatchObject({ leadId: "meow-a", seatKey: "overseer/meow-a/0" });
-    // meow-a now leads a team and still sits where it sat.
-    expect(layout.desks.get("meow-a")?.seatKey).toBe("overseer/nexus/0");
-  });
-
-  it("keeps the column and the order of later teams when an earlier team wraps to a new row", () => {
-    const base = [agent({ id: "root" }), agent({ id: "lead" }, "root"), agent({ id: "under-lead" }, "lead")];
-    // 20 tiles wide: five desks to a pod row.
-    const before = office(base, 20);
-    const more = [...base, ...["c2", "c3", "c4", "c5", "c6"].map((id) => agent({ id }, "root"))];
-    const after = office(more, 20);
-    expect(after.desks.get("under-lead")?.cell.x).toBe(before.desks.get("under-lead")?.cell.x);
-    expect(after.desks.get("under-lead")?.cell.y).toBe((before.desks.get("under-lead")?.cell.y ?? 0) + DESK_HEIGHT);
-    expect(after.desks.get("under-lead")?.seatKey).toBe(before.desks.get("under-lead")?.seatKey);
-    for (const id of ["root", "lead"]) expect(after.desks.get(id)?.cell).toEqual(before.desks.get(id)?.cell);
+    const keys = (layout: Office) => new Map([...layout.desks].map(([id, desk]) => [id, desk.seatKey]));
+    const before = keys(office(agents, 48));
+    const grown = office(
+      [
+        ...agents,
+        agent({ id: "meow-d" }, "nexus"),
+        agent({ id: "helper" }, "meow-a"),
+        agent({ id: "solo-3" }),
+        agent({ id: "other-room", workspaceId: "ws-b" }),
+      ],
+      48,
+    );
+    const after = keys(grown);
+    for (const [id, key] of before) expect(after.get(id)).toBe(key);
+    expect(grown.desks.get("helper")).toMatchObject({ leadId: "meow-a", seatKey: "overseer/meow-a/0" });
+    // meow-a now leads a team and still has the seat it had.
+    expect(grown.desks.get("meow-a")?.seatKey).toBe("overseer/nexus/0");
+    expect(grown.desks.get("meow-d")?.seatKey).toBe("overseer/nexus/3");
   });
 
   it("orders rooms by their oldest crew, not by urgency", () => {
@@ -197,16 +193,6 @@ describe("layoutOffice", () => {
     expect(layout.roomOf.get("urgent")).toBe("ws-new");
   });
 
-  it("puts rooms nobody is in after the rooms in use", () => {
-    const shut = agent({ id: "shut", workspaceId: "ws-first", status: "closed" });
-    const busy = agent({ id: "busy", workspaceId: "ws-second", status: "running" });
-    const layout = office([shut, busy], 30, 1);
-    expect(layout.rooms.map((room) => [room.workspaceId, room.dormant])).toEqual([
-      ["ws-second", false],
-      ["ws-first", true],
-    ]);
-  });
-
   it("keeps a child that runs in another workspace in its crew's room and marks it remote", () => {
     const layout = office([agent({ id: "root" }), agent({ id: "away", workspaceId: "ws-b" }, "root")], 30);
     expect(layout.rooms).toHaveLength(1);
@@ -214,32 +200,63 @@ describe("layoutOffice", () => {
     expect(layout.desks.get("root")?.remote).toBe(false);
   });
 
-  it("fits a phone-width panel and reports a width too narrow to hold a desk", () => {
-    const phone = office(crew(), 20);
-    expect(phone.width).toBe(20);
+  it("makes a room as large as what it holds, never wider than it is offered", () => {
+    const solo = office([agent({ id: "one" })], 40).rooms[0];
+    const five = office(crew().slice(0, 5), 40).rooms[0];
+    const many = office(Array.from({ length: 18 }, (_, index) => agent({ id: `s${index}` })), 40).rooms[0];
+    if (!solo || !five || !many) throw new Error("fixture");
+    const area = (room: Rect) => room.width * room.height;
+    expect(area(solo)).toBeLessThan(area(five));
+    expect(area(five)).toBeLessThan(area(many));
+    expect(solo.width).toBeLessThan(40);
+    // A small crew in a wide pane: pantry and lounge beside the desks, against the top wall.
+    expect(solo.zonesBeside).toBe(true);
+    expect(solo.zones.every((zone) => zone.y === solo.floorTop)).toBe(true);
+    // The same crew in a narrow pane: under the desks.
+    const narrow = office([agent({ id: "one" })], 9).rooms[0];
+    expect(narrow?.zonesBeside).toBe(false);
+    expect(narrow?.width).toBeLessThanOrEqual(9);
+    expect(narrow?.zones.every((zone) => zone.y > (narrow?.floorTop ?? 0))).toBe(true);
+    for (const width of [9, 12, 20, 40]) {
+      for (const room of office(Array.from({ length: 18 }, (_, index) => agent({ id: `w${width}-${index}` })), width).rooms) {
+        expect(room.width).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  it("builds one floor plan: rooms against the top, beside a neighbour, or under one, sharing its wall", () => {
+    const agents = ["ws-a", "ws-b", "ws-c", "ws-d", "ws-e"].flatMap((workspaceId, index) =>
+      Array.from({ length: 1 + index * 2 }, (_, seat) => agent({ id: `${workspaceId}-${seat}`, workspaceId })),
+    );
+    const layout = office(agents, 40);
+    expect(layout.rooms).toHaveLength(5);
+    for (const room of layout.rooms) {
+      // Its top wall is the top of the plan or somebody's bottom wall.
+      const resting = room.y === 0 || layout.rooms.some((other) => other !== room && other.y + other.height - 1 === room.y && other.x < room.x + room.width && room.x < other.x + other.width);
+      expect(resting).toBe(true);
+    }
+    // More than one room to a row where they fit.
+    expect(new Set(layout.rooms.map((room) => room.y)).size).toBeLessThan(5);
+    // Stacked when the plan is only one room wide.
+    const stacked = office(agents, 12);
+    expect(new Set(stacked.rooms.map((room) => room.y)).size).toBe(5);
+    for (let index = 1; index < stacked.rooms.length; index += 1) {
+      const above = stacked.rooms[index - 1] as Room;
+      expect(stacked.rooms[index]?.y).toBe(above.y + above.height - 1);
+    }
+  });
+
+  it("fits a narrow pane and reports a width too narrow to hold a desk", () => {
+    const phone = office(crew(), 13);
+    expect(phone.width).toBe(13);
     expect(phone.cramped).toBe(false);
     expect(phone.rooms).toHaveLength(1);
-    expect(phone.rooms[0]?.width).toBe(20);
+    expect(phone.rooms[0]?.width).toBeLessThanOrEqual(13);
     const tiny = office(crew(), 3);
     expect(tiny.cramped).toBe(true);
     expect(tiny.width).toBe(MIN_ROOM_WIDTH);
     expect(tiny.desks.size).toBe(7);
     expect(new Set([...tiny.desks.values()].map((desk) => desk.cell.x)).size).toBe(1);
-  });
-
-  it("puts rooms side by side on a wide surface, or stacks them when told to", () => {
-    const agents = ["ws-a", "ws-b", "ws-c"].map((workspaceId) => agent({ id: `in-${workspaceId}`, workspaceId }));
-    const wide = office(agents, 140);
-    // Twelve rooms of the target width fit, each sharing a wall with the next.
-    expect(wide.rooms.map((room) => room.width)).toEqual([12, 12, 12]);
-    expect(wide.rooms.map((room) => room.x)).toEqual([0, 11, 22]);
-    expect(new Set(wide.rooms.map((room) => room.y)).size).toBe(1);
-    expect(new Set(wide.rooms.map((room) => room.width)).size).toBe(1);
-    const stacked = office(agents, 140, 1);
-    expect(stacked.rooms.every((room) => room.x === 0 && room.width === 140)).toBe(true);
-    expect(new Set(stacked.rooms.map((room) => room.y)).size).toBe(3);
-    // More columns than can hold a desk each are not honoured.
-    expect(office(agents, 20, 9).rooms.every((room) => room.width >= MIN_ROOM_WIDTH)).toBe(true);
   });
 
   it("holds one workspace of seventy agents in a deep tree without losing or overlapping any", () => {
@@ -250,8 +267,8 @@ describe("layoutOffice", () => {
     }
     for (let solo = 0; solo < 9; solo += 1) agents.push(agent({ id: `solo-${solo}` }));
     expect(agents).toHaveLength(70);
-    for (const width of [20, 200]) {
-      const layout = office(agents, width, 1);
+    for (const width of [13, 200]) {
+      const layout = office(agents, width);
       expect(layout.desks.size).toBe(70);
       expect(new Set(cells(layout).values()).size).toBe(70);
       expect(layout.rooms[0]?.agentCount).toBe(70);
@@ -262,19 +279,110 @@ describe("layoutOffice", () => {
     }
   });
 
-  it("keeps a free corridor inside the left wall, from the door down to the lounge", () => {
-    const layout = office(crew(), 20);
-    const room = layout.rooms[0];
-    if (!room) throw new Error("fixture");
-    expect(room.corridorX).toBe(room.x + 1);
-    expect(room.door.x).toBe(room.corridorX);
-    expect(room.door.y).toBeLessThan(Math.min(...[...layout.desks.values()].map((desk) => desk.cell.y)));
-    for (const desk of layout.desks.values()) expect(desk.cell.x).toBeGreaterThan(room.corridorX);
-    expect(room.lounge.x).toBeLessThanOrEqual(room.corridorX);
+  it("keeps a free corridor inside the left wall, from the door down to the walkway", () => {
+    for (const width of [13, 40]) {
+      const layout = office(crew(), width);
+      const room = layout.rooms[0];
+      if (!room) throw new Error("fixture");
+      expect(room.corridorX).toBe(room.x + 1);
+      expect(room.door).toEqual({ x: room.corridorX, y: room.floorTop - 1 });
+      for (const desk of layout.desks.values()) expect(desk.cell.x).toBeGreaterThan(room.corridorX);
+      expect(room.lounge.walkway.x).toBe(room.corridorX);
+      expect(room.lounge.walkway.x + room.lounge.walkway.width).toBe(room.x + room.width - 1);
+    }
   });
 
   it("is empty for no agents", () => {
     expect(layoutOffice([], { width: 40 })).toMatchObject({ rooms: [], height: 0, cramped: false });
+  });
+});
+
+describe("closed agents", () => {
+  const closed = (list: PaseoAgent[], ...ids: string[]) =>
+    list.map((entry) => (ids.includes(entry.id) ? ({ ...entry, status: "closed" } as PaseoAgent) : entry));
+  const keys = (layout: Office) => Object.fromEntries([...layout.desks].map(([id, desk]) => [id, desk.seatKey]));
+
+  it("have no desk: the room lists them, oldest first, on a fixture on its top wall", () => {
+    const layout = office(closed(crew(), "meow-b", "solo-1"), 40);
+    const room = layout.rooms[0];
+    if (!room) throw new Error("fixture");
+    expect(layout.desks.has("meow-b")).toBe(false);
+    expect(layout.desks.has("solo-1")).toBe(false);
+    expect(layout.desks.size).toBe(5);
+    expect(room.agentCount).toBe(5);
+    expect(room.closed?.ids).toEqual(["solo-1", "meow-b"]);
+    expect(room.closed?.at.y).toBe(room.y);
+    expect(room.closed && room.closed.at.x + 2).toBe(room.x + room.width - 1);
+    // The plate stops short of it.
+    expect(room.header.x + room.header.width).toBeLessThanOrEqual(room.closed?.at.x ?? 0);
+    // They still belong to the room.
+    expect(layout.roomOf.get("meow-b")).toBe(room.workspaceId);
+    expect(office(crew(), 40).rooms[0]?.closed).toBeNull();
+  });
+
+  it("free their desk: teammates seated after them sit one desk up, and nobody else changes seat", () => {
+    const before = keys(office(crew(), 40));
+    const after = keys(office(closed(crew(), "meow-a"), 40));
+    expect(after["meow-b"]).toBe("overseer/nexus/0");
+    expect(after["meow-c"]).toBe("overseer/nexus/1");
+    for (const id of ["overseer", "nexus", "solo-1", "solo-2"]) expect(after[id]).toBe(before[id]);
+    expect(after["meow-a"]).toBeUndefined();
+  });
+
+  it("keep their desk while they are still walking out", () => {
+    const leaving = layoutOffice(groupByWorkspace(buildForest(closed(crew(), "meow-a"), null), new Map()), {
+      width: 40,
+      holding: new Set(["meow-a"]),
+    });
+    expect(keys(leaving)).toEqual(keys(office(crew(), 40)));
+    expect(cells(leaving)).toEqual(cells(office(crew(), 40)));
+    expect(leaving.rooms[0]?.closed).toBeNull();
+  });
+
+  it("never leave two agents at one desk, nor send anyone further from the head of the row, however fast they close", () => {
+    const team = [agent({ id: "lead" }), ...Array.from({ length: 8 }, (_, index) => agent({ id: `m${index}` }, "lead"))];
+    const index = (layout: Office, id: string) => Number(layout.desks.get(id)?.seatKey.split("/").pop());
+    let gone: string[] = [];
+    let previous = office(team, 40);
+    for (const next of ["m2", "m5", "m0", "m7", "m3"]) {
+      gone = [...gone, next];
+      const layout = office(closed(team, ...gone), 40);
+      expect(new Set(cells(layout).values()).size).toBe(layout.desks.size);
+      expect(layout.desks.size).toBe(team.length - gone.length);
+      for (const id of layout.desks.keys()) {
+        expect(index(layout, id)).toBeLessThanOrEqual(index(previous, id));
+        expect(index(previous, id) - index(layout, id)).toBeLessThanOrEqual(1);
+      }
+      previous = layout;
+    }
+    expect(previous.rooms[0]?.closed?.ids).toEqual(["m0", "m2", "m3", "m5", "m7"]);
+  });
+
+  it("leave their team in place when a lead closes", () => {
+    const layout = office(closed(crew(), "nexus"), 40);
+    const pod = layout.rooms[0]?.pods.find((entry) => entry.rootId === "overseer");
+    expect(pod?.teams.map((team) => [team.leadId, team.desks.map((desk) => desk.agentId)])).toEqual([
+      ["overseer", ["overseer"]],
+      ["nexus", ["meow-a", "meow-b", "meow-c"]],
+    ]);
+    expect(layout.rooms[0]?.closed?.ids).toEqual(["nexus"]);
+    // A closed root's parent does not come visiting for it, and a closed parent in the office is not a visitor.
+    expect(layout.visitors.size).toBe(0);
+  });
+
+  it("make a room nobody is in: bare, last, with only the fixture", () => {
+    const shut = agent({ id: "shut", workspaceId: "ws-first", status: "closed" });
+    const busy = agent({ id: "busy", workspaceId: "ws-second", status: "running" });
+    const layout = office([shut, busy], 30);
+    expect(layout.rooms.map((room) => [room.workspaceId, room.dormant])).toEqual([
+      ["ws-second", false],
+      ["ws-first", true],
+    ]);
+    const bare = layout.rooms[1];
+    expect(bare?.zones).toEqual([]);
+    expect(bare?.pods).toEqual([]);
+    expect(bare?.closed?.ids).toEqual(["shut"]);
+    expect((bare?.height ?? 99) < (layout.rooms[0]?.height ?? 0)).toBe(true);
   });
 });
 
@@ -287,7 +395,6 @@ describe("visitors", () => {
   const panel = (extra: PaseoAgent[] = []) =>
     layoutOffice(groupByWorkspace(buildForest([...all, ...extra], "ws-a"), new Map()), {
       width: 30,
-      roomColumns: 1,
       agents: new Map([...directory, ...extra.map((entry) => [entry.id, entry] as const)]),
     });
 
@@ -302,7 +409,7 @@ describe("visitors", () => {
   });
 
   it("moves no seat, and is absent once the parent has a room of its own", () => {
-    const without = layoutOffice(groupByWorkspace(buildForest(all, "ws-a"), new Map()), { width: 30, roomColumns: 1 });
+    const without = layoutOffice(groupByWorkspace(buildForest(all, "ws-a"), new Map()), { width: 30 });
     expect(without.visitors.size).toBe(0);
     expect(cells(panel())).toEqual(cells(without));
     const everywhere = layoutOffice(groupByWorkspace(buildForest(all, null), new Map()), { width: 30, agents: directory });
@@ -366,7 +473,7 @@ describe("zones", () => {
   it("puts props and use points on free tiles, one character to a point", () => {
     const span = (id: string) => (id === "counter" || id === "bookshelf" || id === "sofa" || id === "rug" ? 2 : 1);
     for (const width of [7, 9, 12, 17, 40]) {
-      const room = office([agent({ id: "one", status: "running" })], width, 1).rooms[0];
+      const room = office([agent({ id: "one", status: "running" })], width).rooms[0];
       if (!room) throw new Error("fixture");
       expect(room.zones.map((zone) => zone.kind)).toEqual(["pantry", "lounge"]);
       const spots = room.zones.flatMap((zone) => zone.spots);
@@ -404,23 +511,21 @@ describe("zones", () => {
     }
   });
 
-  it("never moves a desk: the same forest sits the same with zones and without", () => {
-    const agents = crew();
-    for (const width of [9, 12, 20, 48]) {
-      const furnished = office(agents, width, 1);
-      const bare = office(agents.map((entry) => ({ ...entry, status: "closed" }) as PaseoAgent), width, 1);
-      expect(furnished.rooms[0]?.zones.length).toBe(2);
-      expect(bare.rooms[0]?.zones).toEqual([]);
-      expect(bare.rooms[0]?.dormant).toBe(true);
-      expect(cells(bare)).toEqual(cells(furnished));
-      expect((bare.rooms[0]?.height ?? 0) < (furnished.rooms[0]?.height ?? 0)).toBe(true);
-    }
+  it("grow with the crew: a few people need a small pantry", () => {
+    const spots = (count: number) => {
+      const room = office(Array.from({ length: count }, (_, index) => agent({ id: `z${count}-${index}`, status: "running" })), 60).rooms[0];
+      return room?.zones.reduce((sum, zone) => sum + zone.spots.length, 0) ?? 0;
+    };
+    expect(spots(1)).toBeLessThan(spots(4));
+    expect(spots(4)).toBeLessThan(spots(10));
+    // And stop growing: a zone is furniture, not floor.
+    expect(spots(10)).toBe(spots(30));
   });
 });
 
 describe("assignBreaks", () => {
   const now = Date.parse("2026-10-13T06:00:00.000Z");
-  const room = office([agent({ id: "host", status: "running" })], 17, 1).rooms[0];
+  const room = office(Array.from({ length: 9 }, (_, index) => agent({ id: `host-${index}`, status: "running" })), 40).rooms[0];
   if (!room) throw new Error("fixture");
   const spotCount = room.zones.reduce((sum, zone) => sum + zone.spots.length, 0);
   const idlers = (count: number) => Array.from({ length: count }, (_, index) => ({ agentId: `idle-${index}`, since: now - 60_000 - index }));
@@ -498,7 +603,7 @@ describe("presenceOf", () => {
   const now = Date.parse("2026-10-13T06:00:00.000Z");
   const recent = new Date(now - 60_000).toISOString();
   const subject = agent({ id: "subject", updatedAt: recent });
-  const layout = office([subject, agent({ id: "other", status: "running" })], 30, 1);
+  const layout = office([subject, agent({ id: "other", status: "running" })], 30);
   const desk = layout.desks.get("subject");
   const room = layout.rooms[0];
   if (!desk || !room) throw new Error("fixture");
@@ -553,7 +658,7 @@ describe("presences", () => {
       agent({ id: "b", workspaceId: "ws-b", updatedAt: fresh }),
       agent({ id: "busy", workspaceId: "ws-b", status: "running" }),
     ];
-    const layout = office(agents, 30, 1);
+    const layout = office(agents, 30);
     const map = presences(layout, new Map(agents.map((entry) => [entry.id, entry])), crewState, now);
     expect(map.size).toBe(7);
     expect(map.get("busy")?.activity).toBe("typing");

@@ -45,6 +45,7 @@ import {
   MarkerSprite,
   RoomBackdrop,
   bubbleSize,
+  snapToDevice,
   type CharacterPose,
 } from "./sprites";
 import { font, stateColor } from "./ui";
@@ -116,6 +117,8 @@ interface CharacterProps {
   placesKey: string;
   /** Which break place the lounge spot is, in the room's own terms. */
   breakKey: string;
+  /** Which desk is its own. It changes when a teammate ahead of it closes: then it walks one desk up. */
+  seatKey: string;
   /** The free column it takes between rows. */
   corridorX: number;
   /** Its room was already drawn when it appeared: it walks in from the door. */
@@ -131,6 +134,8 @@ interface CharacterProps {
   still: boolean;
   onPress: (agentId: string) => void;
   onGone: (agentId: string) => void;
+  /** It is closed and has walked out of the door: its desk can go to somebody else. */
+  onLeft: (agentId: string) => void;
 }
 
 /**
@@ -150,6 +155,7 @@ const Character = memo(
     places,
     placesKey,
     breakKey,
+    seatKey,
     corridorX,
     enter,
     leaving,
@@ -161,6 +167,7 @@ const Character = memo(
     still: reduced,
     onPress,
     onGone,
+    onLeft,
   }: CharacterProps) {
     const { activity } = presence;
     const spot: Spot = leaving ? "out" : spotOf(activity);
@@ -169,13 +176,14 @@ const Character = memo(
     // Whether it has reached "out"; until then a leaving character is still drawn.
     const [gone, setGone] = useState(spot === "out");
 
-    const latest = useRef({ places, onGone });
-    latest.current = { places, onGone };
+    const latest = useRef({ places, onGone, onLeft });
+    latest.current = { places, onGone, onLeft };
     // Only how it first appears matters; afterwards its room is always "already there".
     const entered = useRef(enter).current;
     const standing = useRef<Standing | null>(null);
-    // Its desk and its door, which only move when the room does; a break place moving is the agent's doing.
-    const fixedKey = `${places.seat.at.x},${places.seat.at.y}|${places.out.at.x},${places.out.at.y}`;
+    // Its door only moves when the room does. Its desk moving within the room, or its break place, is
+    // somebody's doing (a teammate closed, its break moved on), and that is walked.
+    const fixedKey = `${places.out.at.x},${places.out.at.y}`;
     const layout = useRef(fixedKey);
     // The last corner it reached, and the clear row it leaves that corner by.
     const where = useRef<Place>(places[spot]);
@@ -185,7 +193,12 @@ const Character = memo(
     useEffect(() => {
       const here = latest.current.places;
       const place = here[spot];
-      const next: Standing = { spot, key: spot === "lounge" ? breakKey : spot, at: place.at, tile };
+      const next: Standing = {
+        spot,
+        key: spot === "lounge" ? breakKey : spot === "out" ? "out" : seatKey,
+        at: place.at,
+        tile,
+      };
       const previous = standing.current;
       const kind = reduced ? "snap" : moveKind(previous, next, entered);
       const reflowed = layout.current !== fixedKey;
@@ -227,6 +240,7 @@ const Character = memo(
         setRow(place.at.y);
         setGone(spot === "out");
         if (leaving) latest.current.onGone(agent.id);
+        else if (spot === "out") latest.current.onLeft(agent.id);
       };
 
       if (kind === "snap") {
@@ -260,7 +274,7 @@ const Character = memo(
         running?.stop();
       };
       // `places` is read through `placesKey`.
-    }, [agent.id, breakKey, corridorX, entered, leaving, placesKey, position, reduced, spot, tile]);
+    }, [agent.id, breakKey, corridorX, entered, leaving, placesKey, position, reduced, seatKey, spot, tile]);
 
     const pose: CharacterPose = walking ? "walk" : presence.lounging ? "sit" : POSE[activity];
     const frame = useFrame(reduced ? "off" : walking ? "walk" : pose === "type" ? "slow" : "off");
@@ -326,7 +340,7 @@ const Character = memo(
               backgroundColor: theme.colors.surface0,
             }}
           >
-            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 8, lineHeight: 10 }}>
+            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 7, lineHeight: 9 }}>
               visitor
             </Text>
           </View>
@@ -349,6 +363,7 @@ const Character = memo(
     before.agent === after.agent &&
     before.placesKey === after.placesKey &&
     before.breakKey === after.breakKey &&
+    before.seatKey === after.seatKey &&
     before.corridorX === after.corridorX &&
     before.leaving === after.leaving &&
     before.position === after.position &&
@@ -647,8 +662,8 @@ const RoomSign = memo(function RoomSign({
         top: room.header.y * tile,
         maxWidth: room.header.width * tile - 4,
         // The plate hangs on the upper row of the wall; monitors rise into the lower one.
-        height: Math.max(16, Math.min(tile, 22)),
-        paddingHorizontal: 6,
+        height: Math.max(14, Math.min(tile, 18)),
+        paddingHorizontal: 4,
         borderRadius: 4,
         borderWidth: 1,
         borderColor: colors.border,
@@ -659,11 +674,11 @@ const RoomSign = memo(function RoomSign({
       }}
     >
       {urgent ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: urgent }} /> : null}
-      <Text numberOfLines={1} style={{ flexShrink: 1, color: colors.foreground, fontSize: font.xs, fontWeight: "600" }}>
+      <Text numberOfLines={1} style={{ flexShrink: 1, color: colors.foreground, fontSize: 10, fontWeight: "600" }}>
         {room.name}
       </Text>
-      <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: font.xs }}>
-        {summary(room.counts)}
+      <Text numberOfLines={1} style={{ flexShrink: 0, color: colors.foregroundMuted, fontSize: 10 }}>
+        {room.agentCount}
       </Text>
       {mail > 0 ? (
         <>
@@ -675,6 +690,64 @@ const RoomSign = memo(function RoomSign({
   );
 });
 
+/**
+ * A room's closed agents: they have no desk, only this plate on the top wall.
+ * Pressing it lists them, with what can still be done with each.
+ */
+const ClosedFixture = memo(function ClosedFixture({
+  theme,
+  tile,
+  room,
+  matching,
+  dimmed,
+  onPress,
+}: {
+  theme: PluginTheme;
+  tile: number;
+  room: Room;
+  /** How many of them a search or filter singles out; null when none is set. */
+  matching: number | null;
+  dimmed: boolean;
+  onPress: (workspaceId: string) => void;
+}) {
+  const closed = room.closed;
+  if (!closed) return null;
+  const { colors } = theme;
+  const count = closed.ids.length;
+  const found = matching !== null && matching > 0;
+  const slop = touchSlop(Math.min(tile, 18));
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${count} closed ${count === 1 ? "agent" : "agents"} in ${room.name}${found ? `, ${matching} matching` : ""}. Opens the list.`}
+      hitSlop={{ top: slop, bottom: slop, left: 4, right: 4 }}
+      onPress={() => onPress(room.workspaceId)}
+      style={{
+        position: "absolute",
+        left: closed.at.x * tile,
+        top: closed.at.y * tile,
+        width: 2 * tile - 2,
+        height: Math.max(14, Math.min(tile, 18)),
+        borderRadius: 4,
+        borderWidth: 1,
+        borderColor: found ? colors.accent : colors.border,
+        backgroundColor: colors.surface1,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 2,
+        opacity: dimmed ? DIMMED : 1,
+        zIndex: 1,
+      }}
+    >
+      <Icon name="Archive" size={9} color={colors.foregroundMuted} />
+      <Text numberOfLines={1} style={{ color: found ? colors.foreground : colors.foregroundMuted, fontSize: 10 }}>
+        {found ? `${matching}/${count}` : count}
+      </Text>
+    </Pressable>
+  );
+});
+
 interface CastMember {
   agentId: string;
   agent: PaseoAgent;
@@ -682,6 +755,7 @@ interface CastMember {
   places: Places;
   placesKey: string;
   breakKey: string;
+  seatKey: string;
   corridorX: number;
   roomId: string;
   visiting: boolean;
@@ -707,6 +781,12 @@ export interface OfficeSceneProps {
   /** Reduced motion: no walking, no frames, no travelling markers. */
   still: boolean;
   onSelect: (agentId: string) => void;
+  /** A closed agent has walked out of the door. */
+  onLeft: (agentId: string) => void;
+  /** The plate of a room's closed agents was pressed. */
+  onOpenClosed: (workspaceId: string) => void;
+  /** The width of the pane, in pixels: the office sits in the middle of it. */
+  available: number;
   /** The rooms on screen, as the scroll position changes. */
   onRoomsInView?: (workspaceIds: readonly string[]) => void;
 }
@@ -724,6 +804,9 @@ export function OfficeScene({
   highlighted,
   still: reduced,
   onSelect,
+  onLeft,
+  onOpenClosed,
+  available,
   onRoomsInView,
 }: OfficeSceneProps) {
   const width = office.width * tile;
@@ -785,7 +868,7 @@ export function OfficeScene({
         .map((name) => `${places[name].at.x},${places[name].at.y},${places[name].aisleY}`)
         .join("|");
       const breakKey = `${home.x - room.x},${home.y - room.lounge.y}`;
-      out.set(agentId, { agentId, agent, presence, places, placesKey, breakKey, corridorX: room.corridorX, roomId: room.workspaceId, visiting: desk === null });
+      out.set(agentId, { agentId, agent, presence, places, placesKey, breakKey, seatKey: desk?.seatKey ?? "visitor", corridorX: room.corridorX, roomId: room.workspaceId, visiting: desk === null });
     };
     for (const desk of seated) {
       const node = nodes.get(desk.agentId);
@@ -843,10 +926,11 @@ export function OfficeScene({
       <ScrollView
         horizontal
         scrollEnabled={office.cramped}
-        contentContainerStyle={{ minWidth: "100%", height, justifyContent: "center" }}
+        contentContainerStyle={{ minWidth: "100%", height }}
       >
-        {/* A pane is rarely a whole number of tiles wide: the office sits in the middle of what is left over. */}
-        <View style={{ width, height, alignSelf: "center" }}>
+        {/* A pane is rarely a whole number of tiles wide: the office sits in the middle of what is left
+            over, on a device pixel so that nothing in it softens. */}
+        <View style={{ width, height, marginLeft: snapToDevice(Math.max(0, (available - width) / 2)) }}>
           {office.rooms.map((room) => (
             <RoomBackdrop key={room.workspaceId} theme={theme} tile={tile} room={room} />
           ))}
@@ -859,6 +943,20 @@ export function OfficeScene({
               mail={mail.get(room.workspaceId) ?? 0}
             />
           ))}
+          {office.rooms.map((room) => {
+            const matching = highlighted && room.closed ? room.closed.ids.filter((id) => highlighted.has(id)).length : null;
+            return (
+              <ClosedFixture
+                key={`closed:${room.workspaceId}`}
+                theme={theme}
+                tile={tile}
+                room={room}
+                matching={matching}
+                dimmed={highlighted !== null && matching === 0}
+                onPress={onOpenClosed}
+              />
+            );
+          })}
           {seated.map((desk) => {
             const node = nodes.get(desk.agentId);
             if (!node) return null;
@@ -889,6 +987,7 @@ export function OfficeScene({
                 places={member.places}
                 placesKey={member.placesKey}
                 breakKey={member.breakKey}
+                seatKey={member.seatKey}
                 corridorX={member.corridorX}
                 enter={enter}
                 leaving={leaving}
@@ -900,6 +999,7 @@ export function OfficeScene({
                 still={reduced}
                 onPress={onSelect}
                 onGone={onGone}
+                onLeft={onLeft}
               />
             );
           })}

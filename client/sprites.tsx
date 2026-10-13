@@ -7,6 +7,10 @@ import {
   BUBBLE_MAX_WIDTH,
   Sprite,
   anchored,
+  deviceCrispScale,
+  deviceSnap,
+  door,
+  wallTopAt,
   bubble,
   bubbleWidth,
   character,
@@ -54,11 +58,25 @@ export type ScreenState = "on" | "off" | "error";
 
 export interface SpriteProps {
   theme: PluginTheme;
-  /** Pixels per tile; a whole multiple of the 16 px art tile. */
+  /** Pixels per tile; from `crispTile`, so that art pixels land on device pixels. */
   tile: number;
 }
 
-const artScale = (tile: number) => Math.max(1, Math.round(tile / ART_TILE));
+/** Layout pixels per art pixel. The scene picks a tile size that keeps this crisp on the device. */
+const artScale = (tile: number) => tile / ART_TILE;
+
+/**
+ * The tile size, in layout pixels, nearest to `scale` art-pixel sizes that the
+ * device can draw without blur: one art pixel is a whole number of device pixels.
+ */
+export function crispTile(scale: number): number {
+  return ART_TILE * deviceCrispScale(scale, "nearest");
+}
+
+/** A layout length moved to the nearest device pixel, for offsets that are not whole tiles. */
+export function snapToDevice(value: number): number {
+  return deviceSnap(value);
+}
 
 function pose(wanted: CharacterPose, heading: Heading): { pose: ArtPose; facing: Facing } {
   switch (wanted) {
@@ -219,31 +237,47 @@ function roomKey(room: Room): string {
   const zones = room.zones
     .map((zone) => `${zone.kind}@${zone.x - room.x},${zone.y - room.y},${zone.width}x${zone.height}:${zone.props.map((item) => `${item.id}@${item.x - room.x},${item.y - room.y}`).join(",")}`)
     .join(";");
-  const wall = room.lounge.wall ? `${room.lounge.wall.x - room.x}+${room.lounge.wall.width}` : "";
-  return `room:${room.width}x${room.height}:f${room.floorTop - room.y}:d${room.door.x - room.x}:l${room.lounge.y - room.y}:w${wall}:${zones}`;
+  const wall = room.lounge.wall ? `${room.lounge.wall.x - room.x},${room.lounge.wall.y - room.y}+${room.lounge.wall.width}` : "";
+  const pods = room.pods
+    .filter(isCrew)
+    .map((pod) => pod.teams.map((team) => `${team.area.x - room.x},${team.area.y - room.y},${team.area.width}x${team.area.height}`).join("+"))
+    .join("/");
+  return `room2:${room.width}x${room.height}:f${room.floorTop - room.y}:d${room.door.x - room.x}:w${wall}:${zones}:p${pods}`;
 }
 
 const inRect = (x: number, y: number, rect: { x: number; y: number; width: number; height: number }) =>
   x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 
+/** A crew, as against an agent on its own: more than one desk. */
+const isCrew = (pod: Room["pods"][number]) => pod.teams.reduce((sum, team) => sum + team.desks.length, 0) > 1;
+
+const POD_FLOORS: readonly TileId[] = ["pod0", "pod1", "pod2", "pod3"];
+
 function roomBitmap(room: Room, key: string): Bitmap {
   const layers: Layer[] = [];
-  const tileAt = (x: number, y: number): TileId => {
-    // The door: an opening in the top wall at the head of the corridor, running down to the floor.
-    if (x === room.door.x && y < room.floorTop) return y === room.y ? "door" : "doorway";
-    if (x === room.x || x === room.x + room.width - 1 || y === room.y || y === room.y + room.height - 1) return "partition";
+  const isWall = (x: number, y: number) =>
+    inRect(x, y, room) && (x === room.x || x === room.x + room.width - 1 || y === room.y || y === room.y + room.height - 1);
+  // Each team of a crew (a lead's people) has a floor of its own; an agent on its own sits on the plain floor.
+  const teams = room.pods.filter(isCrew).flatMap((pod) => pod.teams);
+  const floorAt = (x: number, y: number): TileId => {
     if (y < room.floorTop) return "wall";
     // The half wall the appliances, the shelves and the sofa stand against.
     if (room.lounge.wall && inRect(x, y, room.lounge.wall)) return "wall";
     const zone = room.zones.find((entry) => inRect(x, y, entry));
     if (zone) return zone.kind === "pantry" ? "kitchen" : "carpet";
+    const team = teams.findIndex((entry) => inRect(x, y, entry.area));
+    if (team >= 0) return POD_FLOORS[team % POD_FLOORS.length] as TileId;
+    if (x === room.door.x && y === room.floorTop) return "doormat";
     return "floor";
   };
   for (let y = room.y; y < room.y + room.height; y += 1) {
     for (let x = room.x; x < room.x + room.width; x += 1) {
-      layers.push({ bitmap: tileBitmap(tileAt(x, y)), x: (x - room.x) * ART_TILE, y: (y - room.y) * ART_TILE });
+      const bitmap = isWall(x, y) ? wallTopAt(isWall, x, y) : tileBitmap(floorAt(x, y));
+      layers.push({ bitmap, x: (x - room.x) * ART_TILE, y: (y - room.y) * ART_TILE });
     }
   }
+  // The door stands in the wall's face, at the head of the corridor.
+  layers.push({ bitmap: door(room.floorTop - room.y - 1), x: (room.door.x - room.x) * ART_TILE, y: ART_TILE });
   const furniture = room.zones.flatMap((zone) => zone.props);
   // A rug lies flat: straight after the floor, under everything else.
   for (const item of [...furniture.filter((entry) => entry.id === "rug"), ...furniture.filter((entry) => entry.id !== "rug")]) {

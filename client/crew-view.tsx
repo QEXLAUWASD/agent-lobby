@@ -1,8 +1,8 @@
 import { usePaseo, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
 import type { PaseoAgent } from "@getpaseo/client";
-import { useCallback, useMemo, useState } from "react";
-import { Text, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PixelRatio, Pressable, Text, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from "react-native";
 import { AgentDialogs, Detail, useAgentActions } from "./detail";
 import { candidatesOf } from "./feed-plan";
 import { CrewList } from "./list";
@@ -16,6 +16,8 @@ import {
   groupByWorkspace,
   matches,
   roleOf,
+  activityAt,
+  formatAge,
   STATE_LABEL,
   STATE_ORDER,
   summary,
@@ -25,7 +27,19 @@ import {
 import { OfficeScene } from "./office";
 import { isDormant, layoutOffice, presences as presencesOf } from "./office-model";
 import { highlighted as highlightedBy, indexNodes, sceneScale } from "./scene-model";
-import { Chip, Empty, IconButton, Muted, StatusDot, font, space, stateColor, useReducedMotion } from "./ui";
+import {
+  Chip,
+  Empty,
+  IconButton,
+  Muted,
+  StatusDot,
+  font,
+  pressStyle,
+  radius,
+  space,
+  stateColor,
+  useReducedMotion,
+} from "./ui";
 import { useClock, useDirectory } from "./use-directory";
 import { useFeed } from "./use-feed";
 
@@ -35,6 +49,7 @@ type Mode = "office" | "list";
 /** Below this width the detail docks under the office instead of beside it. */
 const SIDE_DOCK_MIN_WIDTH = 720;
 const SIDE_DOCK_WIDTH = 320;
+const NOBODY: ReadonlySet<string> = new Set();
 
 export interface CrewViewProps extends PluginSurfaceProps {
   scope: string | null;
@@ -54,6 +69,8 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<string | null>(null);
+  // The room whose closed agents are listed in the dock.
+  const [closedRoom, setClosedRoom] = useState<string | null>(null);
   const [size, setSize] = useState({ view: 0, scene: 0 });
   const [inView, setInView] = useState<readonly string[] | null>(null);
   const { colors } = theme;
@@ -78,8 +95,8 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   );
 
   const office = mode === "office";
-  // One room may be drawn large; a fleet is drawn at 2× to fit more rooms across.
-  const scale = useMemo(() => sceneScale(size.scene, scope === null ? 2 : 3), [size.scene, scope]);
+  // Small, and the same in a side pane as on the whole surface.
+  const scale = useMemo(() => sceneScale(size.scene, PixelRatio.get()), [size.scene]);
   const everyGroup = useMemo(() => groupByWorkspace(roots, directory.workspaces), [roots, directory.workspaces]);
   // Across workspaces, a room nobody is in stays folded away until a search or
   // the Closed filter singles out somebody in it.
@@ -92,16 +109,33 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     );
   }, [everyGroup, scope, highlighted]);
   const folded = everyGroup.length - groups.length;
-  const plan = useMemo(
-    () =>
-      layoutOffice(groups, {
-        width: scale.widthTiles,
-        agents: directory.agents,
-        ...(scope !== null ? { roomColumns: 1 } : {}),
-      }),
-    [groups, scale.widthTiles, scope, directory.agents],
-  );
   const nodes = useMemo(() => indexNodes(roots), [roots]);
+  // A closed agent has no desk, but it keeps the one it had until it has walked out of the door.
+  const [left, setLeft] = useState<ReadonlySet<string>>(NOBODY);
+  const seatedBefore = useRef<ReadonlySet<string>>(NOBODY);
+  const holding = useMemo(() => {
+    if (!office || reducedMotion) return NOBODY;
+    const out = new Set<string>();
+    for (const [id, node] of nodes) {
+      if (node.state === "closed" && seatedBefore.current.has(id) && !left.has(id)) out.add(id);
+    }
+    return out.size > 0 ? out : NOBODY;
+  }, [nodes, left, office, reducedMotion]);
+  const plan = useMemo(
+    () => layoutOffice(groups, { width: scale.widthTiles, agents: directory.agents, holding }),
+    [groups, scale.widthTiles, directory.agents, holding],
+  );
+  useEffect(() => {
+    seatedBefore.current = office ? new Set(plan.desks.keys()) : NOBODY;
+  }, [plan, office]);
+  useEffect(() => {
+    // Whoever is no longer closed, or no longer here, is forgotten.
+    setLeft((current) => {
+      const kept = [...current].filter((id) => nodes.get(id)?.state === "closed");
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [nodes]);
+  const onLeft = useCallback((agentId: string) => setLeft((current) => new Set(current).add(agentId)), []);
   const presences = useMemo(
     () => presencesOf(plan, directory.agents, crewState, now),
     [plan, directory.agents, now],
@@ -117,7 +151,22 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
     (agent: PaseoAgent) => navigation?.openAgent({ agentId: agent.id, serverId: host.id }),
     [navigation, host.id],
   );
-  const toggle = useCallback((agentId: string) => setSelected((current) => (current === agentId ? null : agentId)), []);
+  const toggle = useCallback((agentId: string) => {
+    setClosedRoom(null);
+    setSelected((current) => (current === agentId ? null : agentId));
+  }, []);
+  const openClosed = useCallback((workspaceId: string) => {
+    setSelected(null);
+    setClosedRoom((current) => (current === workspaceId ? null : workspaceId));
+  }, []);
+  const closedList = useMemo(() => {
+    const room = office && closedRoom ? plan.rooms.find((entry) => entry.workspaceId === closedRoom) : undefined;
+    if (!room?.closed) return null;
+    const listed = room.closed.ids.flatMap((id) => nodes.get(id) ?? []);
+    // What a search or filter singles out comes first.
+    const first = highlighted ? listed.filter((node) => highlighted.has(node.agent.id)) : [];
+    return { name: room.name, nodes: [...first, ...listed.filter((node) => !first.includes(node))], matching: first.length };
+  }, [office, closedRoom, plan, nodes, highlighted]);
 
   const renderDetail = useCallback(
     (node: CrewNode, style: StyleProp<ViewStyle>) => (
@@ -265,6 +314,9 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                 highlighted={highlighted}
                 still={reducedMotion}
                 onSelect={toggle}
+                onLeft={onLeft}
+                onOpenClosed={openClosed}
+                available={size.scene}
                 onRoomsInView={setInView}
               />
             ) : null}
@@ -275,7 +327,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                 { backgroundColor: colors.surface1, borderColor: colors.border },
                 sideDock
                   ? { width: SIDE_DOCK_WIDTH, borderLeftWidth: 1 }
-                  : { maxHeight: "50%", borderTopWidth: 1 },
+                  : { maxHeight: "40%", borderTopWidth: 1 },
               ]}
             >
               <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.md }}>
@@ -292,7 +344,12 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                   <Text style={{ color: stateColor(theme, selectedNode.state), fontSize: font.xs }}>
                     {STATE_LABEL[selectedNode.state]}
                   </Text>
-                  <IconButton theme={theme} icon="X" label="Close details" onPress={() => setSelected(null)} />
+                  <IconButton
+                    theme={theme}
+                    icon={closedList ? "ArrowLeft" : "X"}
+                    label={closedList ? "Back to the closed agents" : "Close details"}
+                    onPress={() => setSelected(null)}
+                  />
                 </View>
                 {feed.bubbles.get(selectedNode.agent.id) ? (
                   <Muted theme={theme} size={font.xs} numberOfLines={2}>
@@ -300,6 +357,54 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                   </Muted>
                 ) : null}
                 {renderDetail(selectedNode, null)}
+              </ScrollView>
+            </View>
+          ) : null}
+          {!selectedNode && closedList ? (
+            <View
+              style={[
+                { backgroundColor: colors.surface1, borderColor: colors.border },
+                sideDock ? { width: SIDE_DOCK_WIDTH, borderLeftWidth: 1 } : { maxHeight: "40%", borderTopWidth: 1 },
+              ]}
+            >
+              <ScrollView contentContainerStyle={{ padding: space.md, gap: space.xs }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.sm, fontWeight: "600" }}>
+                      Closed in {closedList.name}
+                    </Text>
+                    <Muted theme={theme} size={font.xs}>
+                      {closedList.nodes.length} {closedList.nodes.length === 1 ? "agent" : "agents"}
+                      {closedList.matching > 0 ? ` · ${closedList.matching} matching` : ""}
+                    </Muted>
+                  </View>
+                  <IconButton theme={theme} icon="X" label="Close the list" onPress={() => setClosedRoom(null)} />
+                </View>
+                {closedList.nodes.map((node, index) => (
+                  <Pressable
+                    key={node.agent.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${displayTitle(node.agent)}, ${[roleOf(node.agent), STATE_LABEL[node.state]].filter(Boolean).join(", ")}`}
+                    onPress={() => setSelected(node.agent.id)}
+                    style={pressStyle(({ hovered, pressed }) => ({
+                      minHeight: 44,
+                      paddingHorizontal: space.sm,
+                      borderRadius: radius.md,
+                      justifyContent: "center",
+                      backgroundColor: hovered || pressed ? colors.surface2 : "transparent",
+                      opacity: highlighted && index >= closedList.matching ? 0.5 : 1,
+                    }))}
+                  >
+                    <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: font.sm }}>
+                      {displayTitle(node.agent)}
+                    </Text>
+                    <Muted theme={theme} size={font.xs} numberOfLines={1}>
+                      {[roleOf(node.agent), displayModel(node.agent), formatAge(activityAt(node.agent), now)]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Muted>
+                  </Pressable>
+                ))}
               </ScrollView>
             </View>
           ) : null}
