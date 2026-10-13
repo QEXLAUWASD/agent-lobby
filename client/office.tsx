@@ -133,8 +133,9 @@ interface CharacterProps {
  * the room. When its spot changes it walks there along the aisle and the
  * corridor; when the same spot is somewhere else the room moved, and it is
  * placed. Under reduced motion it is always placed. A leg of a walk is handed
- * to the platform whole, and so is each loop of frames, so a walking character
- * costs a render per leg and one that types costs none.
+ * to the platform whole, and frames change on the scene's one beat inside
+ * `Frames`, so a walking character costs a render per leg and one that types
+ * costs none of its own.
  */
 const Character = memo(
   function Character({

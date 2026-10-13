@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Animated, Easing, Platform, StyleSheet, View, type StyleProp, type ViewProps, type ViewStyle } from "react-native";
-import { cycleRuns, frameAt, glideAt, glidePieces, runElapsed, type Cycle, type Glide, type Px } from "./motion-model";
+import { frameAt, glideAt, glidePieces, type Cycle, type Glide, type Px } from "./motion-model";
 
 /**
- * Everything that moves, drawn by the platform's own animation and not by this
- * thread. On the web React Native's `Animated` runs in JavaScript and commits
- * a render per display frame, so here a move is a CSS transition, a loop of
- * frames is a stepped CSS animation and a pulse is a keyframe animation: one
- * render when it starts and none while it runs. Native keeps `Animated` on
- * its native driver, and one shared timer for frames.
+ * Everything that moves. On the web React Native's `Animated` runs in
+ * JavaScript and commits a render per display frame, so here a move is a CSS
+ * transition and a pulse or a fade is a keyframe animation: one render when it
+ * starts and none while it runs. Native keeps `Animated` on its native driver.
+ * A loop of frames is the same everywhere: one shared beat.
  */
 const CSS = Platform.OS === "web";
 
@@ -265,20 +264,6 @@ function NativeFadeIn({ ms, still, style, children, ...rest }: ViewProps & { ms:
   );
 }
 
-/** A layer that shows for the first `share` of each loop of its animation, and is hidden for the rest. */
-const shown = new Map<string, ViewStyle>();
-function shownFor(share: number): ViewStyle {
-  const percent = `${Math.round(share * 1e4) / 100}%`;
-  let style = shown.get(percent);
-  if (!style) {
-    style = StyleSheet.create({
-      layer: web({ animationKeyframes: { "0%": { opacity: 1 }, [percent]: { opacity: 0 }, "100%": { opacity: 0 } } }),
-    }).layer;
-    shown.set(percent, style);
-  }
-  return style;
-}
-
 /** One timer for every frame loop that the platform cannot run itself; it stops when nobody listens. */
 const beats = new Map<number, { listeners: Set<() => void>; timer: ReturnType<typeof setInterval> }>();
 function onBeat(beatMs: number, listener: () => void): () => void {
@@ -301,9 +286,16 @@ function onBeat(beatMs: number, listener: () => void): () => void {
 const never = () => () => {};
 
 /**
- * A loop of frames. `render` draws one frame; the frames of a cycle take turns
- * on the one clock, so everybody typing types in step. With `still`, or with a
- * cycle of one frame, only its first frame is drawn and nothing runs.
+ * A loop of frames. `render` draws one frame; every frame of the cycle stays
+ * mounted and one shared beat says which of them shows, so a beat costs two
+ * style writes for whoever's frame changed and nothing for anybody else. The
+ * frames of a cycle take turns on the one clock: everybody typing types in
+ * step. With `still`, or with a cycle of one frame, only its first frame is
+ * drawn and nothing runs.
+ *
+ * Not a stepped CSS animation: a running animation makes the compositor tick
+ * on every display frame, which for thirty small loops measured about twice
+ * the cost of this beat (perf/after, P4 against P4b).
  */
 export function Frames({
   cycle,
@@ -314,40 +306,23 @@ export function Frames({
   still: boolean;
   render: (frame: number) => ReactNode;
 }) {
+  const first = cycle.frames[0] ?? 0;
   const key = `${cycle.beatMs}:${cycle.frames.join("")}`;
   // Keyed by content: a caller may build an equal cycle on every render.
-  const runs = useMemo(() => cycleRuns(cycle), [key]);
-  const animated = !still && cycle.frames.some((frame) => frame !== cycle.frames[0]);
-  // Stepped layers when each frame has one turn per loop; otherwise, and on native, the shared timer.
-  const layered = CSS && animated && runs !== null;
+  const frames = useMemo(() => [...new Set(cycle.frames)], [key]);
+  const animated = !still && frames.length > 1;
   const subscribe = useMemo(
-    () => (animated && !layered ? (listener: () => void) => onBeat(cycle.beatMs, listener) : never),
-    [animated, layered, cycle.beatMs],
+    () => (animated ? (listener: () => void) => onBeat(cycle.beatMs, listener) : never),
+    [animated, cycle.beatMs],
   );
-  const beat = useSyncExternalStore(subscribe, () => (animated && !layered ? Math.floor(Date.now() / cycle.beatMs) : 0));
-  // When the layers were started; each is told how far into its loop it already is.
-  const born = useMemo(() => Date.now(), [key, layered]);
-  if (!animated) return <>{render(cycle.frames[0] ?? 0)}</>;
-  if (!layered || !runs) return <>{render(frameAt(cycle, beat * cycle.beatMs))}</>;
-  const period = cycle.frames.length * cycle.beatMs;
+  // The frame, not the beat: a loop that holds a frame for many beats is drawn once for all of them.
+  const frame = useSyncExternalStore(subscribe, () => (animated ? frameAt(cycle, Date.now()) : first));
+  if (!animated) return <>{render(first)}</>;
   return (
-    <View key={key}>
-      {runs.map((run, index) => (
-        <View
-          key={run.frame}
-          style={[
-            index === 0 ? null : StyleSheet.absoluteFill,
-            { opacity: run.frame === cycle.frames[0] ? 1 : 0 },
-            shownFor(run.length / cycle.frames.length),
-            web({
-              animationDuration: `${period}ms`,
-              animationDelay: `${-Math.round(runElapsed(cycle, run, born))}ms`,
-              animationTimingFunction: "step-end",
-              animationIterationCount: "infinite",
-            }),
-          ]}
-        >
-          {render(run.frame)}
+    <View>
+      {frames.map((each, index) => (
+        <View key={each} style={[index === 0 ? null : StyleSheet.absoluteFill, { opacity: each === frame ? 1 : 0 }]}>
+          {render(each)}
         </View>
       ))}
     </View>

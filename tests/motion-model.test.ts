@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { actFrame } from "../client/scene-model";
-import { cycleRuns, frameAt, glideAt, glidePieces, runElapsed, runShows, type Cycle, type Glide } from "../client/motion-model";
+import { frameAt, glideAt, glidePieces, type Cycle, type Glide } from "../client/motion-model";
 
 const glide: Glide = { from: { x: 0, y: 10 }, to: { x: 100, y: 10 }, ms: 1000, at: 5000 };
 
@@ -47,58 +47,33 @@ describe("glidePieces", () => {
   });
 });
 
-describe("cycleRuns", () => {
-  it("gives each frame of a plain loop one beat", () => {
-    expect(cycleRuns({ frames: [0, 1, 2, 3], beatMs: 140 })).toEqual([
-      { frame: 0, start: 0, length: 1 },
-      { frame: 1, start: 1, length: 1 },
-      { frame: 2, start: 2, length: 1 },
-      { frame: 3, start: 3, length: 1 },
-    ]);
+describe("frameAt", () => {
+  it("shows each frame for one beat, in order, round and round", () => {
+    const walk: Cycle = { frames: [0, 1, 2, 3], beatMs: 140 };
+    expect([0, 139, 140, 279, 280, 420, 560, 700].map((now) => frameAt(walk, now))).toEqual([0, 0, 1, 1, 2, 3, 0, 1]);
   });
 
-  it("joins a turn that wraps round the end of the loop", () => {
-    expect(cycleRuns({ frames: [0, 1, 1, 0, 0], beatMs: 280 })).toEqual([
-      { frame: 1, start: 1, length: 2 },
-      { frame: 0, start: 3, length: 3 },
-    ]);
+  it("puts every equal cycle in step, whenever it is asked: the clock is the only state", () => {
+    const type: Cycle = { frames: [0, 1], beatMs: 280 };
+    const now = 1_791_882_000_123;
+    expect(frameAt(type, now)).toBe(frameAt({ frames: [0, 1], beatMs: 280 }, now));
+    expect(frameAt(type, now + 280)).not.toBe(frameAt(type, now));
+    expect(frameAt(type, now + 560)).toBe(frameAt(type, now));
   });
 
-  it("is one run for a still, and null when a frame comes round twice", () => {
-    expect(cycleRuns({ frames: [0, 0], beatMs: 280 })).toEqual([{ frame: 0, start: 0, length: 2 }]);
-    expect(cycleRuns({ frames: [0, 1, 0, 1, 1], beatMs: 280 })).toBeNull();
-    expect(cycleRuns({ frames: [], beatMs: 280 })).toBeNull();
-  });
-});
-
-describe("a cycle as stepped layers", () => {
-  const cycles: Cycle[] = [
-    { frames: [0, 1], beatMs: 280 },
-    { frames: [0, 1, 2, 3], beatMs: 140 },
-    ...(["drink", "stretch", "talk", "doze"] as const).flatMap((act) =>
-      [0, 1, 6, 7].map((seed) => ({
-        frames: Array.from({ length: 280 }, (_, beat) => actFrame(act, beat, seed)).slice(0, { drink: 10, stretch: 14, talk: 4, doze: 8 }[act]),
-        beatMs: 280,
-      })),
-    ),
-  ];
-
-  it("shows exactly the frame of the beat, at every moment, for every cycle the scene uses", () => {
-    for (const cycle of cycles) {
-      const runs = cycleRuns(cycle);
-      expect(runs).not.toBeNull();
-      for (let now = 1_000_003; now < 1_000_003 + 3 * cycle.frames.length * cycle.beatMs; now += 35) {
-        const showing = runs!.filter((run) => runShows(cycle, run, now)).map((run) => run.frame);
-        expect(showing).toEqual([frameAt(cycle, now)]);
+  it("follows actFrame beat for beat, for every activity the scene loops", () => {
+    for (const act of ["drink", "stretch", "talk", "doze"] as const) {
+      for (const seed of [0, 1, 6, 7]) {
+        const beats = { drink: 10, stretch: 14, talk: 4, doze: 8 }[act];
+        const cycle: Cycle = { frames: Array.from({ length: beats }, (_, beat) => actFrame(act, beat, seed)), beatMs: 280 };
+        for (let beat = 0; beat < 3 * beats; beat += 1) {
+          expect(frameAt(cycle, beat * 280 + 17)).toBe(actFrame(act, beat, seed));
+        }
       }
     }
   });
 
-  it("starts a layer as far into its loop as the clock is", () => {
-    const cycle: Cycle = { frames: [0, 1, 1, 0, 0], beatMs: 100 };
-    const [ones] = cycleRuns(cycle)!;
-    expect(runElapsed(cycle, ones!, 100)).toBe(0);
-    expect(runElapsed(cycle, ones!, 250)).toBe(150);
-    expect(runElapsed(cycle, ones!, 50)).toBe(450);
+  it("is frame 0 for a cycle of nothing", () => {
+    expect(frameAt({ frames: [], beatMs: 280 }, 5_000)).toBe(0);
   });
 });
