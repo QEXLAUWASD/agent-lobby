@@ -21,6 +21,8 @@ export type FeedEvent =
       to: string;
       event: ExchangeEvent;
       text: string;
+      /** The first line in full, for a screen reader; `text` is cut for a bubble. */
+      label?: string;
       at: number;
       seq?: number;
     }
@@ -36,14 +38,16 @@ export type FeedEvent =
       seq?: number;
     }
   | { kind: "tool"; agentId: string; callId: string; name: string; status: ToolStatus; at: number; seq?: number }
-  | { kind: "failed"; agentId: string; text: string; at: number }
-  | { kind: "permission"; agentId: string; requestId: string; text: string; at: number }
+  | { kind: "failed"; agentId: string; text: string; label?: string; at: number }
+  | { kind: "permission"; agentId: string; requestId: string; text: string; label?: string; at: number }
   | { kind: "permission-resolved"; agentId: string; requestId: string; at: number }
   | { kind: "turn-ended"; agentId: string; at: number }
   /** The timeline epoch was replaced; sequence numbers start over. */
   | { kind: "reset"; agentId: string };
 
 export const BUBBLE_MAX_CHARS = 48;
+/** How much of a line a screen reader gets: the bubble shows far less. */
+export const LABEL_MAX_CHARS = 200;
 const SAY_BUFFER_CHARS = 400;
 const AGENT_MESSAGE_CALL_PREFIX = "paseo-agent-message:";
 
@@ -73,6 +77,29 @@ export function toolLabel(name: string): string {
 }
 
 /** The slice of a timeline item this module reads. Everything is optional: it is wire data. */
+const TOOL_WORDS: ReadonlyArray<[RegExp, string]> = [
+  [/^(bash|shell|exec|terminal|run)\b|\b(command|terminal)\b/, "Bash"],
+  [/^(read|view|cat|notebookread)\b/, "Read"],
+  [/^(edit|multiedit|write|notebookedit|apply patch|patch)\b/, "Edit"],
+  [/^(grep|glob|search|find|ls|toolsearch)\b/, "Find"],
+  [/^web|\b(fetch|browser|navigate|screenshot)\b/, "Web"],
+  [/\b(send agent prompt|agent message|message)\b/, "Msg"],
+  [/^(task|agent)\b|\b(create agent|subagent)\b/, "Agent"],
+  [/^todo|\bplan\b/, "Plan"],
+];
+
+/**
+ * One short word for what a tool does, to read at a glance in a bubble: `Bash`,
+ * `Read`, `Edit`, `Find`, `Web`, `Msg`, `Agent`, `Plan`. Anything else keeps its
+ * own first word, cut to eight letters.
+ */
+export function toolWord(label: string): string {
+  const name = label.trim().toLowerCase();
+  for (const [pattern, word] of TOOL_WORDS) if (pattern.test(name)) return word;
+  const first = Array.from(label.trim().split(/\s+/)[0] ?? "").slice(0, 8).join("");
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : "Tool";
+}
+
 export interface TimelineItemLike {
   type?: unknown;
   text?: unknown;
@@ -96,8 +123,8 @@ const NOTIFICATION_TEXT: Record<Exclude<ExchangeEvent, "message">, string> = {
   closed: "Closed",
 };
 
-function exchangeText(event: ExchangeEvent, body: string): string {
-  return event === "message" ? firstLine(body) : NOTIFICATION_TEXT[event];
+function exchangeText(event: ExchangeEvent, body: string, max = BUBBLE_MAX_CHARS): string {
+  return event === "message" ? firstLine(body, max) : NOTIFICATION_TEXT[event];
 }
 const TOOL_STATUSES: readonly string[] = ["running", "completed", "failed", "canceled"];
 
@@ -131,6 +158,7 @@ function exchangeFromToolCall(item: TimelineItemLike, context: ItemContext): Fee
     to: context.agentId,
     event,
     text: exchangeText(event, text(carried?.text) ?? text(detail?.text) ?? ""),
+    label: exchangeText(event, text(carried?.text) ?? text(detail?.text) ?? "", LABEL_MAX_CHARS),
     at: context.at,
     ...(context.seq === undefined ? {} : { seq: context.seq }),
   };
@@ -207,7 +235,15 @@ export function eventsFromStream(payload: StreamPayloadLike, receivedAt: number)
         live: true,
       });
     case "turn_failed":
-      return [{ kind: "failed", agentId, text: firstLine(text(event.error) ?? "") || "Failed", at: receivedAt }];
+      return [
+        {
+          kind: "failed",
+          agentId,
+          text: firstLine(text(event.error) ?? "") || "Failed",
+          label: firstLine(text(event.error) ?? "", LABEL_MAX_CHARS) || "Failed",
+          at: receivedAt,
+        },
+      ];
     case "turn_completed":
     case "turn_canceled":
       return [{ kind: "turn-ended", agentId, at: receivedAt }];
@@ -215,7 +251,16 @@ export function eventsFromStream(payload: StreamPayloadLike, receivedAt: number)
       const requestId = text(event.request?.id);
       if (!requestId) return [];
       const label = text(event.request?.title) ?? text(event.request?.name) ?? text(event.request?.description) ?? "";
-      return [{ kind: "permission", agentId, requestId, text: firstLine(label) || "Needs you", at: receivedAt }];
+      return [
+        {
+          kind: "permission",
+          agentId,
+          requestId,
+          text: firstLine(label) || "Needs you",
+          label: firstLine(label, LABEL_MAX_CHARS) || "Needs you",
+          at: receivedAt,
+        },
+      ];
     }
     case "permission_resolved": {
       const requestId = text(event.requestId);
@@ -267,7 +312,10 @@ export type BubbleTone = "say" | "tool" | "tell" | "ask" | "alert";
 export interface Bubble {
   agentId: string;
   tone: BubbleTone;
+  /** What the bubble shows: short. A tool is one word. */
   text: string;
+  /** The same in full, for a screen reader. */
+  label: string;
   at: number;
   expiresAt: number;
   /** Identity of what the bubble is about: a message key, call id, request id or message-id. */
@@ -381,6 +429,7 @@ function apply(draft: Draft, event: FeedEvent, ttl: FeedTtl): void {
         agentId: event.from,
         tone: "tell",
         text: event.text,
+        label: event.label ?? event.text,
         at: event.at,
         expiresAt: event.at + ttl.tell,
         key: event.id,
@@ -408,6 +457,7 @@ function apply(draft: Draft, event: FeedEvent, ttl: FeedTtl): void {
         agentId: event.agentId,
         tone: "say",
         text: line,
+        label: firstLine(kept, LABEL_MAX_CHARS),
         at: event.at,
         expiresAt: event.at + ttl.say,
         key: event.key,
@@ -419,7 +469,8 @@ function apply(draft: Draft, event: FeedEvent, ttl: FeedTtl): void {
       post(draft, {
         agentId: event.agentId,
         tone: "tool",
-        text: event.name,
+        text: toolWord(event.name),
+        label: event.name,
         at: event.at,
         expiresAt: event.at + (running ? ttl.toolRunning : ttl.toolDone),
         key: event.callId,
@@ -432,6 +483,7 @@ function apply(draft: Draft, event: FeedEvent, ttl: FeedTtl): void {
         agentId: event.agentId,
         tone: "alert",
         text: event.text,
+        label: event.label ?? event.text,
         at: event.at,
         expiresAt: event.at + ttl.alert,
         key: `failed:${event.at}`,
@@ -442,6 +494,7 @@ function apply(draft: Draft, event: FeedEvent, ttl: FeedTtl): void {
         agentId: event.agentId,
         tone: "ask",
         text: event.text,
+        label: event.label ?? event.text,
         at: event.at,
         expiresAt: event.at + ttl.ask,
         key: event.requestId,

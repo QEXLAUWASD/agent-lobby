@@ -296,7 +296,7 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
                 </View>
                 {feed.bubbles.get(selectedNode.agent.id) ? (
                   <Muted theme={theme} size={font.xs} numberOfLines={2}>
-                    {feed.bubbles.get(selectedNode.agent.id)?.text}
+                    {feed.bubbles.get(selectedNode.agent.id)?.label}
                   </Muted>
                 ) : null}
                 {renderDetail(selectedNode, null)}

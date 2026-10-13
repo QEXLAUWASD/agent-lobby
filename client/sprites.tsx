@@ -3,8 +3,12 @@ import { memo, useMemo } from "react";
 import { View } from "react-native";
 import type { Emote, Room } from "./office-model";
 import {
+  BUBBLE_HEIGHT,
+  BUBBLE_MAX_WIDTH,
   Sprite,
   anchored,
+  bubble,
+  bubbleWidth,
   character,
   composite,
   emote,
@@ -166,6 +170,43 @@ export const MarkerSprite = memo(function MarkerSprite({ theme, tile }: SpritePr
  * image. The drawing depends on the room's shape and not on where it stands,
  * so rooms of the same shape share it.
  */
+export interface BubbleArt {
+  text: string;
+  tone: "say" | "tool" | "tell" | "ask" | "alert";
+  status?: "running" | "completed" | "failed" | "canceled";
+}
+
+/** The most a bubble may take of a width of `availablePx`, in art pixels. */
+function bubbleMaxWidth(tile: number, availablePx: number): number {
+  return Math.max(24, Math.min(BUBBLE_MAX_WIDTH, Math.floor(availablePx / artScale(tile))));
+}
+
+/** A bubble's size in layout pixels, without drawing it. The catalogue folds and cuts the text. */
+export function bubbleSize(art: BubbleArt, tile: number, availablePx: number): { width: number; height: number } {
+  const scale = artScale(tile);
+  return {
+    width: bubbleWidth({ ...art, maxWidth: bubbleMaxWidth(tile, availablePx) }) * scale,
+    height: BUBBLE_HEIGHT * scale,
+  };
+}
+
+/**
+ * A speech bubble with its words drawn in: one image. `tail` is where the tail
+ * points, in layout pixels from the bubble's left edge, so it still points at
+ * the speaker when the bubble has been pushed in from an edge of the office.
+ */
+export const BubbleSprite = memo(function BubbleSprite({
+  theme,
+  tile,
+  art,
+  availablePx,
+  tail,
+}: SpriteProps & { art: BubbleArt; availablePx: number; tail: number }) {
+  const scale = artScale(tile);
+  const bitmap = bubble({ ...art, maxWidth: bubbleMaxWidth(tile, availablePx), tailX: Math.round(tail / scale) });
+  return <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} />;
+});
+
 /** What a room's drawing depends on: its shape and furniture, not where it stands. */
 function roomKey(room: Room): string {
   const headerBottom = room.header.y + room.header.height - room.y;

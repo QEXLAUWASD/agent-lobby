@@ -16,11 +16,9 @@ import type { Bubble, Exchange } from "./exchanges";
 import { STATE_LABEL, summary, type CrewNode } from "./model";
 import { DESK_WIDTH, loungeHome, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
 import {
-  BUBBLE_HEIGHT,
   CHARACTER_HEIGHT,
   MARKER_TRAVEL_MS,
   MIN_TOUCH,
-  bubbleBox,
   bubbleTrack,
   characterLabel,
   linkBetween,
@@ -42,12 +40,14 @@ import {
   type Standing,
 } from "./scene-model";
 import {
+  BubbleSprite,
   ChairSprite,
   CharacterSprite,
   DeskSprite,
   EmoteSprite,
   MarkerSprite,
   RoomBackdrop,
+  bubbleSize,
   type CharacterPose,
 } from "./sprites";
 import { font, stateColor } from "./ui";
@@ -470,11 +470,16 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
   );
 });
 
+/**
+ * A pixel bubble over its speaker. It follows the character as it walks and
+ * stays inside the office; the tail points at where the speaker belongs.
+ */
 const SpeechBubble = memo(function SpeechBubble({
   theme,
   tile,
   bubble,
   position,
+  home,
   officeWidth,
   still: reduced,
 }: {
@@ -483,6 +488,8 @@ const SpeechBubble = memo(function SpeechBubble({
   bubble: Bubble;
   /** The speaker's position, so the bubble walks with it. */
   position: Animated.ValueXY;
+  /** The speaker's tile at rest, for the tail. */
+  home: Point;
   officeWidth: number;
   still: boolean;
 }) {
@@ -496,20 +503,16 @@ const SpeechBubble = memo(function SpeechBubble({
     fade.start();
     return () => fade.stop();
   }, [opacity, reduced]);
-  const { colors } = theme;
-  const tone =
-    bubble.tone === "alert"
-      ? colors.statusDanger
-      : bubble.tone === "ask"
-        ? colors.statusWarning
-        : bubble.tone === "tell"
-          ? colors.accent
-          : colors.border;
-  const text =
-    bubble.tone === "tool" && bubble.status === "failed" ? `${bubble.text} failed` : bubble.text;
-  // A tool bubble carries an icon; leave room for it.
-  const { width } = bubbleBox({ x: 0, y: 0 }, bubble.tone === "tool" ? `${text}   ` : text, tile, officeWidth);
-  const track = useMemo(() => bubbleTrack(width, BUBBLE_HEIGHT, tile, officeWidth), [width, tile, officeWidth]);
+  const art = useMemo(
+    () => ({ text: bubble.text, tone: bubble.tone, ...(bubble.status ? { status: bubble.status } : {}) }),
+    [bubble.text, bubble.tone, bubble.status],
+  );
+  const available = officeWidth - 4;
+  const { width, height } = bubbleSize(art, tile, available);
+  const track = useMemo(() => bubbleTrack(width, height, tile, officeWidth), [width, height, tile, officeWidth]);
+  // Where the speaker's head is under the bubble once the bubble has been kept inside the office.
+  const centre = (home.x + 0.5) * tile;
+  const left = Math.min(Math.max(2, centre - width / 2), Math.max(2, officeWidth - width - 2));
   return (
     <Animated.View
       pointerEvents="none"
@@ -518,16 +521,7 @@ const SpeechBubble = memo(function SpeechBubble({
         left: 0,
         top: 0,
         width,
-        height: BUBBLE_HEIGHT,
-        paddingHorizontal: 6,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: tone,
-        backgroundColor: colors.surface0,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
+        height,
         opacity,
         zIndex: ABOVE_ROOM + 1,
         transform: [
@@ -547,17 +541,7 @@ const SpeechBubble = memo(function SpeechBubble({
         ],
       }}
     >
-      {bubble.tone === "tool" ? <Icon name="Wrench" size={10} color={colors.foregroundMuted} /> : null}
-      <Text
-        numberOfLines={1}
-        style={{
-          flexShrink: 1,
-          color: bubble.tone === "tool" ? colors.foregroundMuted : colors.foreground,
-          fontSize: font.xs,
-        }}
-      >
-        {text}
-      </Text>
+      <BubbleSprite theme={theme} tile={tile} art={art} availablePx={available} tail={centre - left} />
     </Animated.View>
   );
 });
@@ -915,7 +899,7 @@ export function OfficeScene({
                 leaving={leaving}
                 position={positionOf(member, enter)}
                 visiting={member.visiting}
-                saying={bubbles.get(member.agentId)?.text ?? null}
+                saying={bubbles.get(member.agentId)?.label ?? null}
                 selected={selected === member.agentId}
                 dimmed={dim(member.agentId)}
                 still={reduced}
@@ -938,6 +922,7 @@ export function OfficeScene({
                 tile={tile}
                 bubble={bubble}
                 position={position}
+                home={member.places[spotOf(member.presence.activity)].at}
                 officeWidth={width}
                 still={reduced}
               />

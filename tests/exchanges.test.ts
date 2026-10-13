@@ -8,6 +8,7 @@ import {
   reduceFeed,
   retainAgents,
   toolLabel,
+  toolWord,
   visibleFeed,
   type FeedEvent,
   type StreamPayloadLike,
@@ -58,6 +59,30 @@ describe("firstLine", () => {
   });
 });
 
+describe("toolWord", () => {
+  it("says what a tool does in one short word", () => {
+    const words = (names: string[]) => names.map((name) => toolWord(toolLabel(name)));
+    expect(words(["Bash", "Read", "Edit", "Write", "MultiEdit", "Grep", "Glob"])).toEqual([
+      "Bash",
+      "Read",
+      "Edit",
+      "Edit",
+      "Edit",
+      "Find",
+      "Find",
+    ]);
+    expect(words(["WebFetch", "WebSearch", "mcp__paseo__browser_screenshot"])).toEqual(["Web", "Web", "Web"]);
+    expect(words(["mcp__paseo__send_agent_prompt", "Task", "TodoWrite", "mcp__paseo__create_agent"])).toEqual([
+      "Msg",
+      "Agent",
+      "Plan",
+      "Agent",
+    ]);
+    expect(toolWord("")).toBe("Tool");
+    expect(toolWord("some very long tool name")).toBe("Some");
+  });
+});
+
 describe("toolLabel", () => {
   it("shortens MCP names and leaves plain ones", () => {
     expect(toolLabel("mcp__paseo__send_agent_prompt")).toBe("send agent prompt");
@@ -78,6 +103,7 @@ describe("eventsFromStream", () => {
         to: "meow",
         event: "message",
         text: "You are Dev B.",
+        label: "You are Dev B.",
         at: 1_000,
         seq: 7,
       },
@@ -116,11 +142,11 @@ describe("eventsFromStream", () => {
       eventsFromStream(timeline("a", { type: "tool_call", callId: "c1", name: "mcp__paseo__list_agents", status: "running" }), 5),
     ).toEqual([{ kind: "tool", agentId: "a", callId: "c1", name: "list agents", status: "running", at: 5 }]);
     expect(eventsFromStream({ agentId: "a", event: { type: "turn_failed", error: "rate limited\nretry later" } }, 5)).toEqual([
-      { kind: "failed", agentId: "a", text: "rate limited", at: 5 },
+      { kind: "failed", agentId: "a", text: "rate limited", label: "rate limited", at: 5 },
     ]);
     expect(
       eventsFromStream({ agentId: "a", event: { type: "permission_requested", request: { id: "p1", name: "Bash", title: "Run npm test" } } }, 5),
-    ).toEqual([{ kind: "permission", agentId: "a", requestId: "p1", text: "Run npm test", at: 5 }]);
+    ).toEqual([{ kind: "permission", agentId: "a", requestId: "p1", text: "Run npm test", label: "Run npm test", at: 5 }]);
     expect(eventsFromStream({ agentId: "a", event: { type: "permission_resolved", requestId: "p1" } }, 5)).toEqual([
       { kind: "permission-resolved", agentId: "a", requestId: "p1", at: 5 },
     ]);
@@ -221,7 +247,7 @@ describe("reduceFeed", () => {
   it("holds a running tool until it settles or its turn ends", () => {
     const tool = (status: "running" | "completed", at: number): FeedEvent => ({ kind: "tool", agentId: "a", callId: "c1", name: "Bash", status, at });
     let state = reduceFeed(EMPTY_FEED, [tool("running", 0)], 0);
-    expect(visibleFeed(state, 30_000).bubbles.get("a")).toMatchObject({ tone: "tool", status: "running" });
+    expect(visibleFeed(state, 30_000).bubbles.get("a")).toMatchObject({ tone: "tool", status: "running", text: "Bash", label: "Bash" });
     state = reduceFeed(state, [tool("completed", 30_000)], 30_000);
     expect(visibleFeed(state, 30_001).bubbles.get("a")?.status).toBe("completed");
     expect(visibleFeed(state, 30_000 + DEFAULT_TTL.toolDone).bubbles.has("a")).toBe(false);
