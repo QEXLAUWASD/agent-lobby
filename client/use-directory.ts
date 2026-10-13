@@ -231,8 +231,10 @@ export function useShown(sized: boolean): boolean {
       setHeld(true);
       return;
     }
+    // Nothing to let go of when it was not shown: a pane not laid out yet starts no timer.
+    if (!held) return;
     const timer = setTimeout(() => setHeld(false), HIDE_AFTER_MS);
     return () => clearTimeout(timer);
-  }, [sized]);
+  }, [sized, held]);
   return sized || held;
 }
