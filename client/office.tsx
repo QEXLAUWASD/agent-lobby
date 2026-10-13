@@ -457,7 +457,8 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
         <ChairSprite theme={theme} tile={tile} />
       </View>
       <View pointerEvents="none" style={{ position: "absolute", left: 0, top: 0 }}>
-        <DeskSprite theme={theme} tile={tile} screen={screen} paused={unseen} />
+        {/* Only somebody working makes the screen move; a finished agent's stays lit and still, something to read. */}
+        <DeskSprite theme={theme} tile={tile} screen={screen} busy={state === "working" && !still} paused={unseen} />
       </View>
       {/* The state in the theme's own status colour, for a reader who does not know the sprites yet. */}
       <View
