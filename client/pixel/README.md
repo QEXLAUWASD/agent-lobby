@@ -46,5 +46,17 @@ Roles differ in outline, not only colour: the overseer has a brimmed hat and a c
 headset with an antenna, a meow cat ears and a tail, a plain agent none of these. `lookFor(agentId)`
 picks skin, hair, hair style, shirt and trousers, the same every time for the same id.
 
+## Caches
+
+Every cache is bounded. Drawings and images dropped from one are made again on the next request.
+
+| Cache | Bound |
+| --- | --- |
+| character bitmaps | 1024 most recently used (about 0.4 MB) |
+| room composites | 32 most recently used, and 8 million pixels in total |
+| data URIs | 1024 most recently used, and 6 million characters in total |
+| props, tiles, emotes | the fixed set of drawings: 24 |
+| palettes | one per theme object, held weakly |
+
 Use `composite` to flatten a room's floor, walls and furniture into one bitmap, so the backdrop
 costs one image instead of one per tile.

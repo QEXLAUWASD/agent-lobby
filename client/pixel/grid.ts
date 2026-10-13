@@ -1,3 +1,4 @@
+import { Lru } from "./lru";
 import { slotIndex, type Slot } from "./palette";
 
 export interface Point {
@@ -86,11 +87,15 @@ export interface Layer {
   readonly y: number;
 }
 
-const composites = new Map<string, Bitmap>();
+/** Room backdrops are large; the least recently used are dropped past either cap. */
+export const COMPOSITE_MAX_ENTRIES = 32;
+export const COMPOSITE_MAX_PIXELS = 8_000_000;
+const composites = new Lru<Bitmap>(COMPOSITE_MAX_ENTRIES, COMPOSITE_MAX_PIXELS, (bitmap) => bitmap.pixels.length);
 
 /**
  * Flattens layers, in order, into one bitmap, so a whole floor or a furnished room costs one image.
- * `key` must describe the layers: the same key returns the first result.
+ * `key` must describe the layers: while a result is cached, the same key returns it. A composite
+ * dropped from the cache is simply drawn again on the next call.
  */
 export function composite(key: string, width: number, height: number, layers: readonly Layer[]): Bitmap {
   const cacheKey = `x:${width}x${height}:${key}`;

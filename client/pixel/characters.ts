@@ -1,4 +1,5 @@
 import { blit, canvas, mirror, paint, type Bitmap, type Canvas, type Legend } from "./grid";
+import { Lru } from "./lru";
 import type { CharacterLook, Slot } from "./palette";
 import { CHAIR_ROWS, PROP_LEGEND } from "./props";
 
@@ -318,9 +319,11 @@ function compose(spec: Required<CharacterSpec>): Canvas {
   return out;
 }
 
-const cache = new Map<string, Bitmap>();
+/** Looks times roles times frames runs to hundreds of thousands of drawings; keep the recent ones. */
+export const CHARACTER_MAX_CACHED = 1024;
+const cache = new Lru<Bitmap>(CHARACTER_MAX_CACHED);
 
-/** The drawing for one character in one pose. The same spec returns the same object. */
+/** The drawing for one character in one pose. While it is cached, the same spec returns the same object. */
 export function character(spec: CharacterSpec): Bitmap {
   const pose = spec.pose ?? "idle";
   const frames = CHARACTER_FRAMES[pose];

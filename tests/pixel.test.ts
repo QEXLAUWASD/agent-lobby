@@ -1,11 +1,18 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { CHARACTER_FRAMES, CHARACTER_HEIGHT, CHARACTER_WIDTH, character } from "../client/pixel/characters";
+import {
+  CHARACTER_FRAMES,
+  CHARACTER_HEIGHT,
+  CHARACTER_MAX_CACHED,
+  CHARACTER_WIDTH,
+  character,
+} from "../client/pixel/characters";
 import type { CharacterPose, CharacterRole, Facing } from "../client/pixel/characters";
 import { contrast, luminance, mix, parseColor } from "../client/pixel/color";
 import { EMOTE_FRAMES, EMOTE_SIZE, emote, type EmoteId } from "../client/pixel/emotes";
-import { composite, mirror, paint, type Bitmap } from "../client/pixel/grid";
+import { COMPOSITE_MAX_ENTRIES, composite, mirror, paint, type Bitmap } from "../client/pixel/grid";
+import { Lru } from "../client/pixel/lru";
 import { SLOTS, lookFor, officePalette, paletteColor, slotIndex } from "../client/pixel/palette";
 import { adler32, crc32, deflate, encodeIndexedPng, pngDataUri, toBase64, upscale, type Rgba } from "../client/pixel/png";
 import { PROPS, TILE, prop, tile, type PropId, type ScreenState } from "../client/pixel/props";
@@ -338,5 +345,56 @@ describe("grid", () => {
     const bottom = [...room.pixels.slice(31 * 32)];
     expect(bottom.slice(13, 18)).toEqual([...plant.pixels.slice(-16)].slice(5, 10));
     expect(composite("test-room", 32, 32, [])).toBe(room);
+  });
+});
+
+describe("cache bounds", () => {
+  it("drops the least recently used entry past the entry cap", () => {
+    const cache = new Lru<number>(2);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    expect(cache.get("a")).toBe(1);
+    cache.set("c", 3);
+    expect(cache.get("b")).toBeUndefined();
+    expect([cache.get("a"), cache.get("c"), cache.size]).toEqual([1, 3, 2]);
+  });
+
+  it("drops entries past the weight cap but keeps the newest", () => {
+    const cache = new Lru<string>(10, 10, (value) => value.length);
+    cache.set("a", "xxxx");
+    cache.set("b", "xxxx");
+    cache.set("c", "xxxx");
+    expect([cache.get("a"), cache.size, cache.weight]).toEqual([undefined, 2, 8]);
+    cache.set("b", "x");
+    expect(cache.weight).toBe(5);
+    cache.set("huge", "x".repeat(50));
+    expect([cache.size, cache.weight, cache.get("huge")?.length]).toEqual([1, 50, 50]);
+  });
+
+  it("forgets old room composites and redraws them on demand", () => {
+    const layers = [{ bitmap: tile("floor"), x: 0, y: 0 }];
+    const first = composite("bound-0", 16, 16, layers);
+    expect(composite("bound-0", 16, 16, layers)).toBe(first);
+    for (let index = 1; index <= COMPOSITE_MAX_ENTRIES; index++) composite(`bound-${index}`, 16, 16, layers);
+    const again = composite("bound-0", 16, 16, layers);
+    expect(again).not.toBe(first);
+    expect(again.pixels).toEqual(first.pixels);
+  });
+
+  it("forgets old character drawings and redraws them on demand", () => {
+    const look = { skin: 0, hair: 0, hairStyle: 0, shirt: 0, pants: 0 };
+    const first = character({ role: "agent", look });
+    for (let index = 0; index < CHARACTER_MAX_CACHED; index++) {
+      character({
+        role: ROLES[index % 4]!,
+        look: { skin: index % 5, hair: Math.floor(index / 5) % 6, hairStyle: 1, shirt: Math.floor(index / 30) % 8, pants: 1 },
+        pose: "walk",
+        facing: FACINGS[Math.floor(index / 240) % 4]!,
+        frame: Math.floor(index / 960),
+      });
+    }
+    const again = character({ role: "agent", look });
+    expect(again).not.toBe(first);
+    expect(again.pixels).toEqual(first.pixels);
   });
 });
