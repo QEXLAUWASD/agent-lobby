@@ -62,6 +62,7 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
         return { stop: () => stop(), ready: stop.ready };
       },
     }));
+    const view = {};
     const subscriptions = new Map<string, { since: number; stop: () => void }>();
     const lastWanted = new Map<string, number>();
     const failed = new Map<string, number>();
@@ -93,8 +94,19 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
         .catch(() => {});
     };
 
-    const open = (agentId: string) => {
+    const open = (agentId: string, rank: number) => {
       const entry = { since: Date.now(), stop: () => {} };
+      const claim = {
+        view,
+        rank,
+        // Another view was owed the slot. Ask again later; by then this view is at its share or the other has left.
+        onRevoked() {
+          if (subscriptions.get(agentId) !== entry) return;
+          subscriptions.delete(agentId);
+          failed.set(agentId, Date.now());
+          sync.current();
+        },
+      };
       const lease = hub.acquire(agentId, (update) => {
         if (subscriptions.get(agentId) !== entry) return;
         switch (update.event.type) {
@@ -114,7 +126,7 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
           default:
             enqueue(eventsFromStream(update, Date.now()));
         }
-      });
+      }, claim);
       if (!lease) {
         // The plugin-wide budget is spent, or the daemon refused: ask again after the retry delay.
         failed.set(agentId, Date.now());
@@ -149,7 +161,7 @@ export function useFeed(paseo: PaseoApi, candidates: readonly FeedCandidate[], o
         subscriptions.delete(id);
         lastWanted.delete(id);
       }
-      for (const id of plan.subscribe) open(id);
+      for (const id of plan.subscribe) open(id, plan.selected.indexOf(id));
       // A refused agent is not in this plan's recheck; come back for it after the retry delay.
       const refused = plan.subscribe.some((id) => !subscriptions.has(id));
       const recheckAt = Math.min(plan.recheckAt ?? Infinity, refused ? at + FEED_RETRY_MS : Infinity);

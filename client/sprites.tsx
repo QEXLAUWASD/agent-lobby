@@ -1,5 +1,5 @@
 import type { PluginTheme } from "@getpaseo/plugin";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { View } from "react-native";
 import type { Emote, Room } from "./office-model";
 import {
@@ -166,16 +166,17 @@ export const MarkerSprite = memo(function MarkerSprite({ theme, tile }: SpritePr
  * image. The drawing depends on the room's shape and not on where it stands,
  * so rooms of the same shape share it.
  */
-const roomBitmaps = new Map<string, Bitmap>();
-
-function roomBitmap(room: Room): Bitmap {
+/** What a room's drawing depends on: its shape and furniture, not where it stands. */
+function roomKey(room: Room): string {
   const headerBottom = room.header.y + room.header.height - room.y;
   const loungeTop = room.lounge.y - room.y;
   const spots = room.lounge.spots.map((spot) => `${spot.kind}@${spot.x - room.x},${spot.y - room.y}`).join(";");
-  const key = `room:${room.width}x${room.height}:h${headerBottom}:l${loungeTop}:${spots}`;
-  // The layout is rebuilt on every directory update; the drawing only when a room changes shape.
-  const known = roomBitmaps.get(key);
-  if (known) return known;
+  return `room:${room.width}x${room.height}:h${headerBottom}:l${loungeTop}:${spots}`;
+}
+
+function roomBitmap(room: Room, key: string): Bitmap {
+  const headerBottom = room.header.y + room.header.height - room.y;
+  const loungeTop = room.lounge.y - room.y;
   const layers: Layer[] = [];
   for (let y = 0; y < room.height; y += 1) {
     for (let x = 0; x < room.width; x += 1) {
@@ -192,14 +193,14 @@ function roomBitmap(room: Room): Bitmap {
       y: (spot.y - room.y + 1) * ART_TILE,
     });
   }
-  const bitmap = composite(key, room.width * ART_TILE, room.height * ART_TILE, layers);
-  if (roomBitmaps.size >= 64) roomBitmaps.delete(roomBitmaps.keys().next().value as string);
-  roomBitmaps.set(key, bitmap);
-  return bitmap;
+  // `composite` is the one cache of room drawings, bounded by the renderer.
+  return composite(key, room.width * ART_TILE, room.height * ART_TILE, layers);
 }
 
 export const RoomBackdrop = memo(function RoomBackdrop({ theme, tile, room }: SpriteProps & { room: Room }) {
-  const bitmap = roomBitmap(room);
+  // The layout is rebuilt on every directory update; the layers only when the room changes shape.
+  const key = roomKey(room);
+  const bitmap = useMemo(() => roomBitmap(room, key), [key]);
   return (
     <Sprite
       sprite={bitmap}

@@ -5,6 +5,12 @@ import { FEED_CAP } from "./feed-plan";
  * mounted Crew view (a panel per workspace tab, the global surface) takes its
  * subscriptions from here, so `cap` bounds what the daemon carries however many
  * views are open, and two views watching the same agent share one subscription.
+ *
+ * The budget is shared fairly. Each view that wants subscriptions is entitled
+ * to `floor(cap / views)` of them, at least one. When the budget is spent, a
+ * view below its share takes a slot from a view above its share: that view's
+ * least important agent that nobody else is watching. A view at or above its
+ * share never takes from anyone, so a slot cannot be passed back and forth.
  */
 
 export interface TimelineSource<Update> {
@@ -19,58 +25,123 @@ export interface Lease {
   ready: Promise<unknown>;
 }
 
+export interface Claim {
+  /** Who is asking: one token per mounted view. */
+  view: object;
+  /** How much the view wants this agent; lower is more. A view's highest-ranked lease is the first it loses. */
+  rank: number;
+  /** The hub took the lease back for another view. It is already released. */
+  onRevoked(): void;
+}
+
 export interface FeedHub<Update> {
   /**
    * A share of the agent's subscription, opening it if nobody has one yet.
-   * Null when the budget is spent on other agents, or the subscription could
-   * not be opened: the caller goes without and asks again later.
+   * Null when the budget is spent and this view has had its share, or the
+   * subscription could not be opened: the caller goes without and asks later.
    */
-  acquire(agentId: string, handler: (update: Update) => void): Lease | null;
+  acquire(agentId: string, handler: (update: Update) => void, claim?: Claim): Lease | null;
   /** How many daemon subscriptions are open. */
   size(): number;
 }
+
+interface Holder<Update> {
+  handler: (update: Update) => void;
+  claim: Claim;
+}
+
+interface Entry<Update> {
+  holders: Set<Holder<Update>>;
+  stop: () => void;
+  ready: Promise<unknown>;
+}
+
+const ANYONE = {};
 
 export function createFeedHub<Update extends { event: { type: string } }>(
   source: TimelineSource<Update>,
   cap: number = FEED_CAP,
 ): FeedHub<Update> {
-  const open = new Map<
-    string,
-    { handlers: Set<(update: Update) => void>; stop: () => void; ready: Promise<unknown> }
-  >();
+  const open = new Map<string, Entry<Update>>();
+
+  const held = (view: object) => {
+    let count = 0;
+    for (const entry of open.values()) for (const holder of entry.holders) if (holder.claim.view === view) count += 1;
+    return count;
+  };
+  const views = () => {
+    const all = new Set<object>();
+    for (const entry of open.values()) for (const holder of entry.holders) all.add(holder.claim.view);
+    return all;
+  };
+
+  /** Frees one slot for `asker` if it is below its share and somebody is above theirs. */
+  const makeRoom = (asker: object): boolean => {
+    const everyone = views();
+    everyone.add(asker);
+    const share = Math.max(1, Math.floor(cap / everyone.size));
+    if (held(asker) >= share) return false;
+    type Slot = { agentId: string; entry: Entry<Update>; holder: Holder<Update> };
+    let victim = null as Slot | null;
+    let most = share;
+    for (const view of everyone) {
+      const count = held(view);
+      if (view === asker || count <= most) continue;
+      // Only an agent this view alone is watching frees a slot.
+      let worst = null as Slot | null;
+      for (const [agentId, entry] of open) {
+        if (entry.holders.size !== 1) continue;
+        const [holder] = entry.holders as unknown as [Holder<Update>];
+        if (holder.claim.view !== view) continue;
+        if (!worst || holder.claim.rank > worst.holder.claim.rank) worst = { agentId, entry, holder };
+      }
+      if (worst) {
+        victim = worst;
+        most = count;
+      }
+    }
+    if (!victim) return false;
+    open.delete(victim.agentId);
+    victim.entry.holders.clear();
+    victim.entry.stop();
+    victim.holder.claim.onRevoked();
+    return true;
+  };
+
   return {
     size: () => open.size,
-    acquire(agentId, handler) {
+    acquire(agentId, handler, claim = { view: ANYONE, rank: 0, onRevoked() {} }) {
       let entry = open.get(agentId);
       if (!entry) {
-        if (open.size >= cap) return null;
-        const handlers = new Set<(update: Update) => void>();
+        if (open.size >= cap && !makeRoom(claim.view)) return null;
+        const holders = new Set<Holder<Update>>();
         try {
           const subscription = source.subscribe(agentId, (update) => {
             const current = open.get(agentId);
-            if (!current || current.handlers !== handlers) return;
+            if (!current || current.holders !== holders) return;
             // An error means the SDK has already released the subscription.
             if (update.event.type === "error") open.delete(agentId);
-            for (const notify of [...handlers]) notify(update);
+            for (const holder of [...holders]) holder.handler(update);
           });
-          entry = { handlers, stop: () => subscription.stop(), ready: subscription.ready };
+          entry = { holders, stop: () => subscription.stop(), ready: subscription.ready };
         } catch {
           return null;
         }
         open.set(agentId, entry);
       }
-      const held = entry;
-      held.handlers.add(handler);
+      const mine = entry;
+      const holder: Holder<Update> = { handler, claim };
+      mine.holders.add(holder);
       let released = false;
       return {
-        ready: held.ready,
+        ready: mine.ready,
         release() {
           if (released) return;
           released = true;
-          held.handlers.delete(handler);
-          if (held.handlers.size > 0 || open.get(agentId) !== held) return;
+          if (!mine.holders.delete(holder)) return;
+          if (mine.holders.size > 0 || open.get(agentId) !== mine) return;
           open.delete(agentId);
-          held.stop();
+          mine.stop();
         },
       };
     },
