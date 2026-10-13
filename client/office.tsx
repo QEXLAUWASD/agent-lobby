@@ -13,7 +13,7 @@ import {
   type NativeSyntheticEvent,
 } from "react-native";
 import type { Bubble, Exchange } from "./exchanges";
-import { STATE_LABEL, summary, type CrewNode } from "./model";
+import { STATE_LABEL, type CrewNode } from "./model";
 import { DESK_WIDTH, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
 import {
   CHARACTER_HEIGHT,
@@ -191,6 +191,7 @@ const Character = memo(
     latest.current = { places, onGone, onLeft };
     // Only how it first appears matters; afterwards its room is always "already there".
     const entered = useRef(enter).current;
+    const reported = useRef(false);
     const standing = useRef<Standing | null>(null);
     // Its door only moves when the room does. Its desk moving within the room, or its break place, is
     // somebody's doing (a teammate closed, its break moved on), and that is walked.
@@ -251,7 +252,12 @@ const Character = memo(
         setRow(place.at.y);
         setGone(spot === "out");
         if (leaving) latest.current.onGone(agent.id);
-        else if (spot === "out") latest.current.onLeft(agent.id);
+        // That it has left its desk is told once, however often it arrives at the door afterwards.
+        else if (spot !== "out") reported.current = false;
+        else if (!reported.current) {
+          reported.current = true;
+          latest.current.onLeft(agent.id);
+        }
       };
 
       if (kind === "snap") {
@@ -676,7 +682,8 @@ const RoomSign = memo(function RoomSign({
       pointerEvents="none"
       accessible
       accessibilityRole="header"
-      accessibilityLabel={`${room.name}, ${summary(room.counts)}`}
+      // What the plate and the cabinet show: who is in, and who has closed and left.
+      accessibilityLabel={`${room.name}, ${room.agentCount} in${room.closed ? `, ${room.closed.ids.length} closed` : ""}`}
       style={{
         position: "absolute",
         left: room.header.x * tile + 2,
