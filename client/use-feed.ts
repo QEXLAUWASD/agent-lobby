@@ -18,11 +18,10 @@ import { FEED_CAP, FEED_RETRY_MS, isWanted, planFeed, type FeedCandidate } from 
 /** Stream chunks arrive many times a second; the view hears about them this often. */
 const FLUSH_MS = 150;
 /**
- * What a new subscription reads of the past: enough for the bubble of what the
- * agent is doing now and an ask still open. Everything drawn comes from the
- * last few items; older ones have expired by their own lifetimes.
+ * What a new subscription reads of the past. A busy agent writes more than a handful of items
+ * inside the lifetime of a bubble or a message, and a room scrolled into view has to show them.
  */
-const BACKFILL_LIMIT = 6;
+const BACKFILL_LIMIT = 20;
 
 export interface Feed {
   /** agentId → the bubble over its head right now. */
