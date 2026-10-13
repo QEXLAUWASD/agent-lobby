@@ -120,6 +120,8 @@ interface CharacterProps {
   selected: boolean;
   dimmed: boolean;
   still: boolean;
+  /** Its room is scrolled out of view: it still goes where it belongs, but its frames rest. */
+  unseen: boolean;
   onPress: (agentId: string) => void;
   onGone: (agentId: string) => void;
   /** It is closed and has walked out of the door: its desk can go to somebody else. */
@@ -153,6 +155,7 @@ const Character = memo(
     selected,
     dimmed,
     still: reduced,
+    unseen,
     onPress,
     onGone,
     onLeft,
@@ -338,7 +341,7 @@ const Character = memo(
         >
           <Frames
             cycle={cycle}
-            still={reduced}
+            still={reduced || unseen}
             render={(frame) => (
               <CharacterSprite
                 theme={theme}
@@ -381,7 +384,7 @@ const Character = memo(
           >
             <Frames
               cycle={emoteCycle}
-              still={reduced}
+              still={reduced || unseen}
               render={(frame) => <EmoteSprite theme={theme} tile={tile} kind={presence.emote ?? "check"} frame={frame} />}
             />
           </View>
@@ -404,6 +407,7 @@ const Character = memo(
     before.selected === after.selected &&
     before.dimmed === after.dimmed &&
     before.still === after.still &&
+    before.unseen === after.unseen &&
     before.onPress === after.onPress &&
     before.presence.activity === after.presence.activity &&
     before.presence.state === after.presence.state &&
@@ -789,6 +793,8 @@ export interface OfficeSceneProps {
   available: number;
   /** The rooms on screen, as the scroll position changes. */
   onRoomsInView?: (workspaceIds: readonly string[]) => void;
+  /** What was reported there, once known: nobody in any other room is animated. */
+  inView?: readonly string[] | null;
 }
 
 export function OfficeScene({
@@ -808,7 +814,9 @@ export function OfficeScene({
   onOpenClosed,
   available,
   onRoomsInView,
+  inView = null,
 }: OfficeSceneProps) {
+  const seen = useMemo(() => (inView ? new Set(inView) : null), [inView]);
   const width = office.width * tile;
   const height = office.height * tile;
   const scroll = useRef({ top: 0, height: 0 });
@@ -1002,6 +1010,7 @@ export function OfficeScene({
                 selected={selected === member.agentId}
                 dimmed={dim(member.agentId)}
                 still={reduced}
+                unseen={seen !== null && !seen.has(member.roomId)}
                 onPress={onSelect}
                 onGone={onGone}
                 onLeft={onLeft}
