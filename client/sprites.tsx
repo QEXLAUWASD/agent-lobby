@@ -1,6 +1,9 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { memo, useMemo } from "react";
 import { View } from "react-native";
+import type { CrewState } from "./model";
+import { Strip } from "./motion";
+import { loopOf, type Cycle } from "./motion-model";
 import type { Emote, Room } from "./office-model";
 import {
   BUBBLE_MAX_WIDTH,
@@ -14,7 +17,10 @@ import {
   door,
   wallTopAt,
   bubble,
-  character,
+  characterAnimation,
+  deskAnimation,
+  emoteAnimation,
+  stateIcon,
   composite,
   emote,
   lookFor,
@@ -24,7 +30,7 @@ import {
   PROPS,
   TILE as ART_TILE,
   CHARACTER_FRAMES,
-  EMOTE_FRAMES,
+  type Animation,
   type CharacterPose as ArtPose,
   type EmoteId,
   type Bitmap,
@@ -112,6 +118,65 @@ function pose(wanted: CharacterPose, heading: Heading): { pose: ArtPose; facing:
   }
 }
 
+/**
+ * How long each frame of a loop shows, in milliseconds. A loop costs a repaint
+ * per change of frame and nothing else, so these are as slow as still reads:
+ * a screen that is busy, a bubble that bobs, a sleeper's Zs.
+ */
+export const FRAME_MS = {
+  /** A walking step, and half of it is not a step. */
+  walk: 140,
+  /** Typing, and the beat activities are counted in. */
+  beat: 280,
+  /** A working screen scrolls a line. */
+  screen: 320,
+  readyBob: 800,
+  zzz: 900,
+  icon: { "needs-input": 140, failed: 1000, working: 320, ready: 320, idle: 800, closed: 1000 },
+} as const;
+
+/** A loop drawn from its strip with its anchor at (`x`, `y`); the still when there is nothing to play. */
+function Loop({
+  theme,
+  animation,
+  scale,
+  cycle,
+  paused,
+  x,
+  y,
+}: {
+  theme: PluginTheme;
+  animation: Animation;
+  scale: number;
+  cycle: Cycle | null;
+  paused: boolean;
+  x: number;
+  y: number;
+}) {
+  const palette = officePalette(theme);
+  const at = anchored(animation.still, scale, x, y);
+  // A cycle may count frames past the strip's end, as a frame number always could: it wraps.
+  const played = useMemo(
+    () => (cycle ? { frames: cycle.frames.map((frame) => frame % animation.frames), beatMs: cycle.beatMs } : null),
+    [cycle, animation.frames],
+  );
+  if (!played || animation.frames === 1 || played.frames.every((frame) => frame === played.frames[0])) {
+    return <Sprite sprite={animation.still} palette={palette} scale={scale} style={at} />;
+  }
+  return (
+    <Strip
+      count={animation.frames}
+      width={animation.frameWidth * scale}
+      height={animation.frameHeight * scale}
+      cycle={played}
+      paused={paused}
+      style={at}
+    >
+      <Sprite sprite={animation.strip} palette={palette} scale={scale} />
+    </Strip>
+  );
+}
+
 export const CharacterSprite = memo(function CharacterSprite({
   theme,
   tile,
@@ -119,7 +184,8 @@ export const CharacterSprite = memo(function CharacterSprite({
   role,
   pose: wanted,
   heading,
-  frame,
+  cycle = null,
+  paused = false,
   carry = null,
   lift = 0,
 }: SpriteProps & {
@@ -128,62 +194,102 @@ export const CharacterSprite = memo(function CharacterSprite({
   role: SpriteRole;
   pose: CharacterPose;
   heading: Heading;
-  /** A running counter; it wraps at the pose's own frame count. 0 is the still. */
-  frame: number;
+  /** Which frame of the pose shows on each beat; null for the still. */
+  cycle?: Cycle | null;
+  /** Held where it is: its room is out of view. */
+  paused?: boolean;
   carry?: "cup" | "book" | null;
   /** Art pixels to raise it, so a sitter rests on a seat. */
   lift?: number;
 }) {
   const scale = artScale(tile);
-  const bitmap = character({ role, look: lookFor(agentId), ...pose(wanted, heading), frame, carry });
+  const animation = characterAnimation({ role, look: lookFor(agentId), ...pose(wanted, heading), carry });
   return (
     <View style={{ width: tile, height: tile * CHARACTER_HEIGHT }}>
-      <Sprite
-        sprite={bitmap}
-        palette={officePalette(theme)}
-        scale={scale}
-        style={anchored(bitmap, scale, tile / 2, tile * CHARACTER_HEIGHT - lift * scale)}
-      />
+      <Loop theme={theme} animation={animation} scale={scale} cycle={cycle} paused={paused} x={tile / 2} y={tile * CHARACTER_HEIGHT - lift * scale} />
     </View>
   );
 });
 
+// A sleeper's Zs drift; the rest hold still.
 const EMOTE: Record<Emote, EmoteId> = { question: "question", alert: "fail", check: "check", zzz: "zzz" };
+const EMOTE_MS: Partial<Record<Emote, number>> = { zzz: FRAME_MS.zzz };
 
 /** How many frames each loop has, for whoever runs it. */
 export const WALK_FRAMES = CHARACTER_FRAMES.walk;
 export const TYPE_FRAMES = CHARACTER_FRAMES.sit;
-export const emoteFrames = (kind: Emote): number => EMOTE_FRAMES[EMOTE[kind]];
 
 export const EmoteSprite = memo(function EmoteSprite({
   theme,
   tile,
   kind,
-  frame,
-}: SpriteProps & { kind: Emote; frame: number }) {
+  still = false,
+  paused = false,
+}: SpriteProps & { kind: Emote; still?: boolean; paused?: boolean }) {
   const scale = artScale(tile);
-  const bitmap = emote(EMOTE[kind], frame);
+  const animation = emoteAnimation(EMOTE[kind]);
+  const ms = EMOTE_MS[kind];
+  const cycle = useMemo(() => (still || ms === undefined ? null : loopOf(animation.frames, ms)), [still, ms, animation.frames]);
   return (
     <View style={{ width: tile, height: tile }}>
-      <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} style={anchored(bitmap, scale, tile / 2, tile)} />
+      <Loop theme={theme} animation={animation} scale={scale} cycle={cycle} paused={paused} x={tile / 2} y={tile} />
     </View>
   );
 });
 
 const SCREEN = { on: "lit", off: "off", error: "error" } as const;
 
-/** A desk two tiles wide; its monitor rises above the box. */
+/** A desk two tiles wide; its monitor rises above the box. With `busy`, a lit screen scrolls. */
 export const DeskSprite = memo(function DeskSprite({
   theme,
   tile,
   screen,
-  frame = 0,
-}: SpriteProps & { screen: ScreenState; frame?: number }) {
+  busy = false,
+  paused = false,
+}: SpriteProps & { screen: ScreenState; busy?: boolean; paused?: boolean }) {
   const scale = artScale(tile);
-  const bitmap = prop("desk", { screen: SCREEN[screen], frame });
+  const animation = deskAnimation(SCREEN[screen]);
+  const cycle = useMemo(() => (busy ? loopOf(animation.frames, FRAME_MS.screen) : null), [busy, animation.frames]);
   return (
     <View style={{ width: tile * 2, height: tile }}>
-      <Sprite sprite={bitmap} palette={officePalette(theme)} scale={scale} style={anchored(bitmap, scale, tile, tile)} />
+      <Loop theme={theme} animation={animation} scale={scale} cycle={cycle} paused={paused} x={tile} y={tile} />
+    </View>
+  );
+});
+
+const ICON_ART = stateIcon("closed").frameWidth;
+
+/** Layout pixels across a state icon: 16 where the screen can draw that crisply, 14.4 at 1.67×. */
+export const STATE_ICON_SIZE = ICON_ART * deviceCrispScale(16 / ICON_ART);
+
+/**
+ * An agent's state as a small picture, for a row of text: a shape of its own
+ * for each state, in the state's colour, moving a little where the state is one that goes on.
+ */
+export const StateIcon = memo(function StateIcon({
+  theme,
+  state,
+  still = false,
+}: {
+  theme: PluginTheme;
+  state: CrewState;
+  /** Reduced motion: the first frame. */
+  still?: boolean;
+}) {
+  const animation = stateIcon(state);
+  const scale = STATE_ICON_SIZE / ICON_ART;
+  const cycle = useMemo(() => (still ? null : loopOf(animation.frames, FRAME_MS.icon[state])), [still, animation.frames, state]);
+  return (
+    <View accessible={false} style={{ width: STATE_ICON_SIZE, height: STATE_ICON_SIZE }}>
+      <Loop
+        theme={theme}
+        animation={animation}
+        scale={scale}
+        cycle={cycle}
+        paused={false}
+        x={animation.anchor.x * scale}
+        y={animation.anchor.y * scale}
+      />
     </View>
   );
 });

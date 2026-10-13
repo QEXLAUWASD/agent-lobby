@@ -91,3 +91,21 @@ export function frameAt(cycle: Cycle, now: number): number {
   if (length === 0) return 0;
   return cycle.frames[Math.floor(now / cycle.beatMs) % length] ?? 0;
 }
+
+/** A plain loop: each of `count` frames for one beat, in order. */
+export function loopOf(count: number, beatMs: number): Cycle {
+  return { frames: Array.from({ length: count }, (_, frame) => frame), beatMs };
+}
+
+/**
+ * A cycle as the moments at which the frame changes: how far through the loop
+ * (0 to 1) and to which frame. The first is always at 0. A stepped animation
+ * needs exactly these keyframes, each held until the next.
+ */
+export function cycleSteps(cycle: Cycle): { at: number; frame: number }[] {
+  const steps: { at: number; frame: number }[] = [];
+  cycle.frames.forEach((frame, beat) => {
+    if (beat === 0 || frame !== cycle.frames[beat - 1]) steps.push({ at: beat / cycle.frames.length, frame });
+  });
+  return steps;
+}

@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Animated, Easing, Platform, StyleSheet, View, type StyleProp, type ViewProps, type ViewStyle } from "react-native";
-import { frameAt, glideAt, glidePieces, type Cycle, type Glide, type Px } from "./motion-model";
+import { cycleSteps, frameAt, glideAt, glidePieces, type Cycle, type Glide, type Px } from "./motion-model";
 
 /**
  * Everything that moves. On the web React Native's `Animated` runs in
  * JavaScript and commits a render per display frame, so here a move is a CSS
  * transition and a pulse or a fade is a keyframe animation: one render when it
- * starts and none while it runs. Native keeps `Animated` on its native driver.
- * A loop of frames is the same everywhere: one shared beat.
+ * starts and none while it runs, and a loop of frames is a strip slid by a
+ * stepped animation. Native keeps `Animated` on its native driver and one
+ * shared timer for frames.
  */
 const CSS = Platform.OS === "web";
 
@@ -264,7 +265,7 @@ function NativeFadeIn({ ms, still, style, children, ...rest }: ViewProps & { ms:
   );
 }
 
-/** One timer for every frame loop that the platform cannot run itself; it stops when nobody listens. */
+/** One timer per beat length for the frame loops the platform cannot run itself; it stops when nobody listens. */
 const beats = new Map<number, { listeners: Set<() => void>; timer: ReturnType<typeof setInterval> }>();
 function onBeat(beatMs: number, listener: () => void): () => void {
   let beat = beats.get(beatMs);
@@ -285,46 +286,85 @@ function onBeat(beatMs: number, listener: () => void): () => void {
 
 const never = () => () => {};
 
+/** True under a pane that is not on screen: every loop below it stands still. */
+export const MotionPaused = createContext(false);
+
+/** One keyframe per change of frame: the strip is slid to that frame and held there until the next. */
+const slides = new Map<string, ViewStyle>();
+function slideFor(count: number, cycle: Cycle): ViewStyle {
+  const key = `${count}|${cycle.frames.join(",")}`;
+  let style = slides.get(key);
+  if (!style) {
+    // As CSS text: keyframes are not put through the style preprocessor, so a transform array would be dropped.
+    const at = (frame: number) => ({ transform: `translateX(${(-100 * frame) / count}%)` });
+    const steps: Record<string, unknown> = {};
+    for (const step of cycleSteps(cycle)) steps[`${Math.round(1e4 * step.at) / 100}%`] = at(step.frame);
+    steps["100%"] = at(cycle.frames[cycle.frames.length - 1] ?? 0);
+    style = StyleSheet.create({ strip: web({ animationKeyframes: steps }) }).strip;
+    slides.set(key, style);
+  }
+  return style;
+}
+
 /**
- * A loop of frames. `render` draws one frame; every frame of the cycle stays
- * mounted and one shared beat says which of them shows, so a beat costs two
- * style writes for whoever's frame changed and nothing for anybody else. The
- * frames of a cycle take turns on the one clock: everybody typing types in
- * step. With `still`, or with a cycle of one frame, only its first frame is
- * drawn and nothing runs.
+ * A loop of frames played from a strip: `children` is one image holding
+ * `count` frames side by side, each `width` by `height`, behind a window one
+ * frame wide. `cycle` says which frame shows on each beat. Every loop runs on
+ * the one clock, so equal cycles are in step wherever they were started.
  *
- * Not a stepped CSS animation: a running animation makes the compositor tick
- * on every display frame, which for thirty small loops measured about twice
- * the cost of this beat (perf/after, P4 against P4b).
+ * On the web the strip is slid by a stepped CSS animation: no timer, no render
+ * and no style written while it plays; `paused` holds it where it is. Elsewhere
+ * one shared timer per beat length moves it. The caller draws a still instead
+ * when nothing should move.
  */
-export function Frames({
+export function Strip({
+  count,
+  width,
+  height,
   cycle,
-  still,
-  render,
+  paused = false,
+  style,
+  children,
 }: {
+  count: number;
+  width: number;
+  height: number;
   cycle: Cycle;
-  still: boolean;
-  render: (frame: number) => ReactNode;
+  paused?: boolean;
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
 }) {
-  const first = cycle.frames[0] ?? 0;
-  const key = `${cycle.beatMs}:${cycle.frames.join("")}`;
-  // Keyed by content: a caller may build an equal cycle on every render.
-  const frames = useMemo(() => [...new Set(cycle.frames)], [key]);
-  const animated = !still && frames.length > 1;
+  const held = useContext(MotionPaused) || paused;
+  const key = `${cycle.beatMs}:${cycle.frames.join(",")}`;
+  // How far into its loop the clock is when the animation is started; keyed by content, as a caller may build an equal cycle anew.
+  const elapsed = useMemo(() => Date.now() % (cycle.frames.length * cycle.beatMs), [key]);
   const subscribe = useMemo(
-    () => (animated ? (listener: () => void) => onBeat(cycle.beatMs, listener) : never),
-    [animated, cycle.beatMs],
+    () => (!CSS && !held ? (listener: () => void) => onBeat(cycle.beatMs, listener) : never),
+    [held, cycle.beatMs],
   );
-  // The frame, not the beat: a loop that holds a frame for many beats is drawn once for all of them.
-  const frame = useSyncExternalStore(subscribe, () => (animated ? frameAt(cycle, Date.now()) : first));
-  if (!animated) return <>{render(first)}</>;
+  const frame = useSyncExternalStore(subscribe, () => (CSS ? 0 : frameAt(cycle, Date.now())));
   return (
-    <View>
-      {frames.map((each, index) => (
-        <View key={each} style={[index === 0 ? null : StyleSheet.absoluteFill, { opacity: each === frame ? 1 : 0 }]}>
-          {render(each)}
-        </View>
-      ))}
+    <View style={[style, { width, height, overflow: "hidden" }]}>
+      <View
+        key={key}
+        style={[
+          { width: count * width, height },
+          CSS
+            ? [
+                slideFor(count, cycle),
+                web({
+                  animationDuration: `${cycle.frames.length * cycle.beatMs}ms`,
+                  animationDelay: `${-elapsed}ms`,
+                  animationTimingFunction: "step-end",
+                  animationIterationCount: "infinite",
+                  animationPlayState: held ? "paused" : "running",
+                }),
+              ]
+            : { transform: [{ translateX: -frame * width }] },
+        ]}
+      >
+        {children}
+      </View>
     </View>
   );
 }

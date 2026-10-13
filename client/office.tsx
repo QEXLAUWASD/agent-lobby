@@ -12,8 +12,8 @@ import {
 } from "react-native";
 import type { Bubble, Exchange } from "./exchanges";
 import { STATE_LABEL, type CrewNode } from "./model";
-import { FadeIn, Frames, Mover, afterPaint, createMotion, useFollow, useMotion, type Motion, type Move } from "./motion";
-import { glideAt, restingAt, type Cycle } from "./motion-model";
+import { FadeIn, Mover, afterPaint, createMotion, useFollow, useMotion, type Motion, type Move } from "./motion";
+import { glideAt, loopOf, restingAt, type Cycle } from "./motion-model";
 import { DESK_WIDTH, type Desk, type Office, type Point, type Presence, type Room } from "./office-model";
 import {
   CHARACTER_HEIGHT,
@@ -47,20 +47,17 @@ import {
   CharacterSprite,
   DeskSprite,
   EmoteSprite,
+  FRAME_MS,
   MarkerSprite,
   RoomBackdrop,
   TYPE_FRAMES,
   WALK_FRAMES,
   bubbleSize,
-  emoteFrames,
   snapToDevice,
   type CharacterPose,
 } from "./sprites";
 import { font, stateColor } from "./ui";
 
-/** A walking step; typing, emotes and activities change every other one. */
-const STEP_MS = 140;
-const BEAT_MS = 2 * STEP_MS;
 const DIMMED = 0.28;
 /**
  * Characters are stacked by the row they stand on. Messages and speech are not
@@ -68,10 +65,8 @@ const DIMMED = 0.28;
  */
 const ABOVE_ROOM = 100_000;
 
-const loop = (count: number, beatMs: number): Cycle => ({ frames: Array.from({ length: count }, (_, frame) => frame), beatMs });
-const STILL: Cycle = loop(1, BEAT_MS);
-const WALK: Cycle = loop(WALK_FRAMES, STEP_MS);
-const TYPE: Cycle = loop(TYPE_FRAMES, BEAT_MS);
+const WALK: Cycle = loopOf(WALK_FRAMES, FRAME_MS.walk);
+const TYPE: Cycle = loopOf(TYPE_FRAMES, FRAME_MS.beat);
 
 const POSE: Record<Presence["activity"], CharacterPose> = {
   typing: "type",
@@ -133,9 +128,8 @@ interface CharacterProps {
  * the room. When its spot changes it walks there along the aisle and the
  * corridor; when the same spot is somewhere else the room moved, and it is
  * placed. Under reduced motion it is always placed. A leg of a walk is handed
- * to the platform whole, and frames change on the scene's one beat inside
- * `Frames`, so a walking character costs a render per leg and one that types
- * costs none of its own.
+ * to the platform whole, and so is each loop of frames, as a strip: a walking
+ * character costs a render per leg and one that types costs none.
  */
 const Character = memo(
   function Character({
@@ -292,18 +286,19 @@ const Character = memo(
           : POSE[activity];
     // People across a table take turns: whoever faces right speaks on the even beats.
     const seed = seedOf(agent.id, presence.facing);
-    const cycle = useMemo<Cycle>(
+    const cycle = useMemo<Cycle | null>(
       () =>
-        walking
-          ? WALK
-          : pose === "type"
-            ? TYPE
-            : act && act !== "read"
-              ? { frames: actCycle(act, seed), beatMs: BEAT_MS }
-              : STILL,
-      [walking !== null, pose, act, seed],
+        reduced
+          ? null
+          : walking
+            ? WALK
+            : pose === "type"
+              ? TYPE
+              : act && act !== "read"
+                ? { frames: actCycle(act, seed), beatMs: FRAME_MS.beat }
+                : null,
+      [reduced, walking !== null, pose, act, seed],
     );
-    const emoteCycle = useMemo(() => (presence.emote ? loop(emoteFrames(presence.emote), BEAT_MS) : STILL), [presence.emote]);
     const move = useMotion(motion);
     const height = tile * CHARACTER_HEIGHT;
     // The pressable itself is at least 44 px each way: a visitor or a wanderer has no desk cell behind it.
@@ -340,22 +335,17 @@ const Character = memo(
             paddingTop: padTop,
           }}
         >
-          <Frames
+          <CharacterSprite
+            theme={theme}
+            tile={tile}
+            agentId={agent.id}
+            role={spriteRole(agent)}
+            pose={pose}
+            heading={walking ?? presence.facing}
             cycle={cycle}
-            still={reduced || unseen}
-            render={(frame) => (
-              <CharacterSprite
-                theme={theme}
-                tile={tile}
-                agentId={agent.id}
-                role={spriteRole(agent)}
-                pose={pose}
-                heading={walking ?? presence.facing}
-                frame={frame}
-                carry={presence.carry}
-                lift={walking ? 0 : presence.lift}
-              />
-            )}
+            paused={unseen}
+            carry={presence.carry}
+            lift={walking ? 0 : presence.lift}
           />
         </Pressable>
         {visiting ? (
@@ -383,11 +373,7 @@ const Character = memo(
             // At the desk the emote sits to the right of the head, clear of the monitor.
             style={{ position: "absolute", left: spot === "seat" || spot === "stand" ? (tile * 9) / 16 : 0, bottom: height - tile / 8 }}
           >
-            <Frames
-              cycle={emoteCycle}
-              still={reduced || unseen}
-              render={(frame) => <EmoteSprite theme={theme} tile={tile} kind={presence.emote ?? "check"} frame={frame} />}
-            />
+            <EmoteSprite theme={theme} tile={tile} kind={presence.emote} still={reduced} paused={unseen} />
           </View>
         ) : null}
       </Mover>
@@ -429,6 +415,10 @@ interface DeskProps {
   presence: Presence | undefined;
   selected: boolean;
   dimmed: boolean;
+  /** Reduced motion: the screen holds still. */
+  still: boolean;
+  /** Its room is out of view: the screen holds where it is. */
+  unseen: boolean;
   onPress: (agentId: string) => void;
 }
 
@@ -436,7 +426,7 @@ interface DeskProps {
  * The desk cell is the large target: two tiles by three, 64 by 96 px at 2×. It speaks for the agent only when no character is sitting there to do
  * so (closed, or away in the lounge), so a screen reader meets each agent once.
  */
-const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, selected, dimmed, onPress }: DeskProps) {
+const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, selected, dimmed, still, unseen, onPress }: DeskProps) {
   const { agent, state } = node;
   const vacant = !presence?.visible;
   const elsewhere = presence?.activity === "wandering" || presence?.activity === "gathering";
@@ -467,7 +457,7 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
         <ChairSprite theme={theme} tile={tile} />
       </View>
       <View pointerEvents="none" style={{ position: "absolute", left: 0, top: 0 }}>
-        <DeskSprite theme={theme} tile={tile} screen={screen} />
+        <DeskSprite theme={theme} tile={tile} screen={screen} paused={unseen} />
       </View>
       {/* The state in the theme's own status colour, for a reader who does not know the sprites yet. */}
       <View
@@ -519,6 +509,8 @@ const DeskCell = memo(function DeskCell({ theme, tile, node, desk, presence, sel
   before.presence === after.presence &&
   before.selected === after.selected &&
   before.dimmed === after.dimmed &&
+  before.still === after.still &&
+  before.unseen === after.unseen &&
   before.onPress === after.onPress,
 );
 
@@ -984,6 +976,8 @@ export function OfficeScene({
                 presence={presences.get(desk.agentId)}
                 selected={selected === desk.agentId}
                 dimmed={dim(desk.agentId)}
+                still={reduced}
+                unseen={seen !== null && !seen.has(office.roomOf.get(desk.agentId) ?? "")}
                 onPress={onSelect}
               />
             );

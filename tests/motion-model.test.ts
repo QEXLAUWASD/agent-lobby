@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { actFrame } from "../client/scene-model";
-import { frameAt, glideAt, glidePieces, type Cycle, type Glide } from "../client/motion-model";
+import { cycleSteps, frameAt, glideAt, glidePieces, loopOf, type Cycle, type Glide } from "../client/motion-model";
 
 const glide: Glide = { from: { x: 0, y: 10 }, to: { x: 100, y: 10 }, ms: 1000, at: 5000 };
 
@@ -75,5 +75,48 @@ describe("frameAt", () => {
 
   it("is frame 0 for a cycle of nothing", () => {
     expect(frameAt({ frames: [], beatMs: 280 }, 5_000)).toBe(0);
+  });
+});
+
+describe("cycleSteps", () => {
+  it("is one step per frame for a plain loop, evenly spaced from 0", () => {
+    expect(cycleSteps(loopOf(4, 140))).toEqual([
+      { at: 0, frame: 0 },
+      { at: 0.25, frame: 1 },
+      { at: 0.5, frame: 2 },
+      { at: 0.75, frame: 3 },
+    ]);
+  });
+
+  it("has a step only where the frame changes, so a held frame is one keyframe", () => {
+    expect(cycleSteps({ frames: [0, 0, 1, 1, 1, 0, 0, 0, 0, 0], beatMs: 280 })).toEqual([
+      { at: 0, frame: 0 },
+      { at: 0.2, frame: 1 },
+      { at: 0.5, frame: 0 },
+    ]);
+    expect(cycleSteps({ frames: [1, 1], beatMs: 280 })).toEqual([{ at: 0, frame: 1 }]);
+  });
+
+  it("played as held steps shows the cycle's frame at every moment, for every loop the scene uses", () => {
+    const cycles: Cycle[] = [
+      loopOf(2, 280),
+      loopOf(4, 140),
+      loopOf(8, 320),
+      ...(["drink", "stretch", "talk", "doze"] as const).flatMap((act) =>
+        [0, 1, 6, 7].map((seed) => {
+          const beats = { drink: 10, stretch: 14, talk: 4, doze: 8 }[act];
+          return { frames: Array.from({ length: beats }, (_, beat) => actFrame(act, beat, seed)), beatMs: 280 };
+        }),
+      ),
+    ];
+    for (const cycle of cycles) {
+      const steps = cycleSteps(cycle);
+      const period = cycle.frames.length * cycle.beatMs;
+      for (let now = 7_000_011; now < 7_000_011 + 2 * period; now += 37) {
+        const through = (now % period) / period;
+        const held = [...steps].reverse().find((step) => step.at <= through);
+        expect(held?.frame).toBe(frameAt(cycle, now));
+      }
+    }
   });
 });

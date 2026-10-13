@@ -25,6 +25,7 @@ import {
   type CrewNode,
   type CrewState,
 } from "./model";
+import { MotionPaused } from "./motion";
 import { OfficeScene } from "./office";
 import {
   isDormant,
@@ -333,6 +334,8 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
   );
 
   return (
+    // Behind another tab nothing here is painted; its loops are held, not left to the browser to notice.
+    <MotionPaused.Provider value={!shown}>
     <View style={{ flex: 1, backgroundColor: colors.surface0 }} onLayout={onViewLayout}>
       {header}
 
@@ -480,5 +483,6 @@ export function CrewView({ scope: homeScope, theme, host, layout, navigation }: 
         platform={layout.platform}
       />
     </View>
+    </MotionPaused.Provider>
   );
 }
