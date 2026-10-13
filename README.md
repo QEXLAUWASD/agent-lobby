@@ -1,6 +1,6 @@
 # Agent Lobby
 
-A Paseo plugin that shows your agents as a small pixel-art office. Each workspace is a room, each
+A plugin that shows your agents as a small pixel-art office. Each workspace is a room, each
 agent has a desk, and a character's pose tells you what its agent is doing: typing, waiting for
 you, finished, resting, or gone home. It lives in a side pane and is meant to be glanced at.
 
@@ -119,13 +119,12 @@ agents: only the daemon's own record of an agent-to-agent message, with its veri
 
 Every sprite, tile and the two pixel fonts are original and drawn in `client/pixel/` as code: text
 grids, a palette taken from the Paseo theme, and a small PNG encoder. No third-party asset is
-bundled. The idea of agents as office workers owes a debt to
-[agent-town](https://github.com/geezerrrr/agent-town); none of its art, tiles or map is used.
+bundled.
 
 ## Install
 
 ```bash
-git clone <this repository> agent-lobby
+git clone https://github.com/linhmh8/agent-lobby
 cd agent-lobby
 npm install
 paseo plugin install "$PWD"
@@ -160,3 +159,20 @@ paseo plugin reload lobby    # recompile and reload in the running app
   archived, the rest simply go.
 - Bubbles drop Vietnamese tone marks and other accents (`Lỗi` reads `Loi`), and at this size their
   text is something to lean in for, not to read across the room.
+
+## Acknowledgements
+
+- [agent-town](https://github.com/geezerrrr/agent-town) for the idea of agents as workers in a
+  pixel office, with seats, wandering and speech bubbles as the language of state. None of its
+  code, art, tiles or map is used here.
+- [Gather](https://www.gather.town) for the picture of a shared office seen from above.
+- [Bàn về multi-agent orchestration và mô hình SLP](https://vhlam.com/article/agent-orchestration-multi-agent-slp),
+  the article that inspired this project: it is what made orchestrating agents a daily practice,
+  and it opened up what working with agents can be. With gratitude to its author.
+- [Paseo](https://paseo.sh) ([source](https://github.com/getpaseo/paseo)) and its plugin SDK, which
+  this runs on and whose plugin documentation it follows.
+- [React Native](https://reactnative.dev) and
+  [React Native for Web](https://necolas.github.io/react-native-web/), the primitives everything
+  here is drawn with.
+
+Licensed under MIT, as declared in `package.json`.
